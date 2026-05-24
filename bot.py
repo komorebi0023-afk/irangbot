@@ -95,6 +95,7 @@ async def on_ready():
     print(f'로그인 성공: {bot.user.name} | 구글 시트 연동 준비 완료!')
 
 # --- 👑 구글 시트 동기화 (새로운 핵심 기능) ---
+# --- 👑 구글 시트 동기화 (보안 패치 완료) ---
 @bot.command(name='점수동기화')
 async def sync_scores(ctx):
     if not is_admin(ctx): return await ctx.send("❌ 관리자만 사용할 수 있습니다.")
@@ -109,8 +110,14 @@ async def sync_scores(ctx):
         creds = Credentials.from_service_account_file('credentials.json', scopes=scopes)
         client = gspread.authorize(creds)
         
-        # 💡 [필수 수정] 아래 문자열에 방장님의 구글 시트 키값을 붙여넣으세요!
-        sheet_key = "여기에_본인의_구글시트_키값_입력" 
+        # 💡 [보안 수정] 코드에 직접 적지 않고 환경변수나 sheet_key.txt 파일에서 키값을 가져옵니다.
+        sheet_key = os.environ.get('SHEET_KEY')
+        if not sheet_key and os.path.exists('sheet_key.txt'):
+            with open('sheet_key.txt', 'r', encoding='utf-8') as f:
+                sheet_key = f.read().strip()
+                
+        if not sheet_key:
+            return await status_msg.edit(content="❌ 시트 키값을 찾을 수 없습니다. 서버에 `sheet_key.txt` 파일이 있는지 확인해 주세요.")
         
         spreadsheet = client.open_by_key(sheet_key)
         worksheet = spreadsheet.get_worksheet(0)
@@ -143,7 +150,6 @@ async def sync_scores(ctx):
         await status_msg.edit(content=f"✅ 구글 시트 동기화 완료! 총 **{len(synced_data)}명**의 최신 프로필을 저장했습니다.")
     except Exception as e:
         await status_msg.edit(content=f"❌ 동기화 실패! 에러 발생:\n```{e}```")
-
 # --- 📊 프로필 확인 (업그레이드) ---
 @bot.command(name='점수')
 async def check_profile(ctx, member: discord.Member = None):
