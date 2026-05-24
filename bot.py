@@ -170,7 +170,10 @@ async def show_help(ctx):
     embed.add_field(name="`!점수` / `!점수 @유저`", value="유저의 상세 내전 프로필과 점수를 확인합니다.", inline=False)
     embed.add_field(name="`!내전시작` (관리자)", value="팀 자동 분배 및 음성 채널 배치를 진행합니다.", inline=False)
     embed.add_field(name="`!대기실복귀` (관리자)", value="팀 채널에 흩어진 유저들을 대기실로 불러옵니다.", inline=False)
+    embed.add_field(name="`!대기실설정` / `!팀채널설정 [1~4]` (관리자)", value="내전용 음성 채널들을 지정합니다.", inline=False)
+    embed.add_field(name="`!관리자추가 @유저` (관리자)", value="해당 유저에게 봇 제어 권한을 줍니다.", inline=False)
     embed.add_field(name="`!맵`", value="내전 전장 선택 및 룰렛을 돌립니다.", inline=False)
+    embed.add_field(name="`!청소`", value="입력한 숫자만큼 위의 채팅을 깔끔하게 삭제합니다.", inline=False)
     embed.add_field(name="`!귀여워`", value="비밀 이스터에그 🐾", inline=False)
     await ctx.send(embed=embed)
 
