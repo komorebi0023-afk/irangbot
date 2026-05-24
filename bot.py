@@ -499,7 +499,12 @@ async def show_cute_instagram(ctx):
     await ctx.send("🐾 https://www.instagram.com/i.rang0321/")
 
 token = os.environ.get('BOT_TOKEN')
+
+if not token and os.path.exists('token.txt'):
+    with open('token.txt', 'r', encoding='utf-8') as f:
+        token = f.read().strip()
+
 if token:
     bot.run(token)
 else:
-    print("❌ 토큰을 찾을 수 없습니다. 환경변수 설정을 확인해 주세요.")
+    print("❌ 토큰을 찾을 수 없습니다. token.txt 파일이 제대로 있는지 확인해 주세요.")
