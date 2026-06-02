@@ -88,10 +88,12 @@ def load_data(file_name):
 def save_data(file_name, data):
     with open(file_name, 'w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False, indent=4)
 
-def is_admin(ctx):
-    if ctx.author.guild_permissions.administrator: return True
+def is_admin(obj):
+    # Context와 Interaction 모두 유저 객체를 안전하게 가져오도록 분기 처리
+    author = obj.author if hasattr(obj, 'author') else obj.user
+    if author.guild_permissions.administrator: return True
     config = load_data(CONFIG_FILE)
-    if str(ctx.author.id) in config.get('admins', []): return True
+    if str(author.id) in config.get('admins', []): return True
     return False
 
 def get_google_client():
@@ -403,6 +405,27 @@ def generate_workshop_code(teams, banned_heroes):
     
     return ws_text
 
+# [새로 추가] 연전 진행 시 사용되는 독립된 밴픽 개수 선택 드롭다운 클래스
+class DirectSelectBanCount(discord.ui.Select):
+    def __init__(self, caps, tms, chans, admin_ch):
+        self.caps, self.tms, self.chans, self.admin_ch = caps, tms, chans, admin_ch
+        super().__init__(placeholder="다음 세트: 팀당 몇 명을 밴할까요?", options=[
+            discord.SelectOption(label="팀당 1개 밴", value="1"),
+            discord.SelectOption(label="팀당 2개 밴", value="2"),
+            discord.SelectOption(label="팀당 3개 밴", value="3")
+        ])
+        
+    async def callback(self, interaction: discord.Interaction):
+        count = int(self.values[0])
+        cfg = load_data(CONFIG_FILE)
+        ann_ch = bot.get_channel(int(cfg.get('announce_id'))) if cfg.get('announce_id') else interaction.channel
+        
+        # 3분할 복구된 BanPickView 호출
+        bp_view = BanPickView(self.caps, self.tms, self.chans, count, self.admin_ch)
+        msg = "👑 **[다음 세트 밴픽 진행]** 각 팀 주장: " + " / ".join([c.mention for c in self.caps]) + "\n🚨 주장들은 공지 채널의 역할군별 메뉴에서 밴할 영웅을 선택해 주세요!"
+        await ann_ch.send(content=msg, view=bp_view)
+        await interaction.response.edit_message(content="✅ 공지 채널에 다음 세트 밴픽 화면을 성공적으로 띄웠습니다!", view=None)
+
 # [새로 추가] 통합 관리 컨트롤 패널 및 다전제 확인 뷰
 class NextSetConfirmView(discord.ui.View):
     def __init__(self, teams, team_channels, captains):
@@ -411,26 +434,21 @@ class NextSetConfirmView(discord.ui.View):
 
     @discord.ui.button(label="🔄 현재 멤버 그대로 다음 세트 밴픽", style=discord.ButtonStyle.success, row=0)
     async def next_set_ban(self, interaction: discord.Interaction, button: discord.ui.Button):
-        class NextBanCount(discord.ui.Select):
-            def __init__(self, caps, tms, chans, admin_ch):
-                self.caps, self.tms, self.chans, self.admin_ch = caps, tms, chans, admin_ch
-                super().__init__(placeholder="다음 세트: 팀당 몇 명을 밴할까요?", options=[
-                    discord.SelectOption(label="팀당 1개 밴", value="1"),
-                    discord.SelectOption(label="팀당 2개 밴", value="2"),
-                    discord.SelectOption(label="팀당 3개 밴", value="3")
-                ])
-            async def callback(self, inter):
-                count = int(self.values[0])
-                cfg = load_data(CONFIG_FILE)
-                ann_ch = bot.get_channel(int(cfg.get('announce_id'))) if cfg.get('announce_id') else inter.channel
-                bp_view = BanPickView(self.caps, self.tms, self.chans, count, self.admin_ch)
-                msg = "👑 **[다음 세트 밴픽 진행]** 각 팀 주장: " + " / ".join([c.mention for c in self.caps])
-                await ann_ch.send(content=msg, view=bp_view)
-                await inter.response.edit_message(content="✅ 공지 채널에 다음 세트 밴픽 화면을 띄웠습니다!", view=None)
-
-        view = discord.ui.View()
-        view.add_item(NextBanCount(self.captains, self.teams, self.team_channels, interaction.channel))
-        await interaction.response.edit_message(content="⚖️ 다음 세트의 밴픽 개수를 정해주세요.", view=view)
+        if not is_admin(interaction):
+            return await interaction.response.send_message("❌ 관리자 권한이 없습니다.", ephemeral=True)
+            
+        # 💡 조건문 분기: 이전에 주장을 뽑지 않고 스킵한 상태였다면 주장 수동 선택창으로 회항
+        if self.captains is None or len(self.captains) == 0:
+            await interaction.response.edit_message(
+                content="👑 이전 판에 밴픽을 스킵하여 주장 데이터가 없습니다. 각 팀의 주장을 드롭다운에서 먼저 선출해 주세요.", 
+                embed=None, 
+                view=ManualCaptainSelectView(self.teams, self.team_channels)
+            )
+        else:
+            # 주장이 이미 존재하는 연전 상태라면 바로 밴 개수 선택으로 진입
+            view = discord.ui.View()
+            view.add_item(DirectSelectBanCount(self.captains, self.teams, self.team_channels, interaction.channel))
+            await interaction.response.edit_message(content="⚖️ 다음 세트의 밴픽 개수를 정해주세요.", view=view)
 
     @discord.ui.button(label="⏩ 밴픽 건너뛰기 (바로 진행)", style=discord.ButtonStyle.secondary, row=0)
     async def next_set_skip(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -545,56 +563,65 @@ class AdminControlPanel(discord.ui.View):
         await interaction.edit_original_response(content=f"✅ {move_success}명의 팀원을 대기실({main_lobby.name})로 무사히 복귀시켰습니다!")
 
 # --- 🚫 6. 밴픽 시스템 ---
+# [교체] 역할군별 3분할 밴픽이 완전 복구된 BanPickView 및 서브 클래스 덩어리입니다.
+class BanRoleSelect(discord.ui.Select):
+    def __init__(self, role, heroes, parent_view):
+        self.parent_view = parent_view
+        # 이미 밴된 영웅은 선택지에서 제외
+        options = [discord.SelectOption(label=h, value=h) for h in heroes if h not in parent_view.banned_heroes]
+        super().__init__(
+            placeholder=f"🚫 [{role}] 밴 선택 ({len(parent_view.banned_heroes)}/{parent_view.max_bans}개)",
+            options=options[:25],
+            custom_id=f"ban_select_{role}"
+        )
+    
+    async def callback(self, interaction: discord.Interaction):
+        view = self.parent_view
+        # [보안 검증] 방장 및 지정된 주장 2명만 제어 가능
+        if not (is_admin(interaction) or interaction.user.id in [c.id for c in view.captains]):
+            return await interaction.response.send_message("❌ 밴픽 조작 권한이 없습니다. (각 팀 주장 및 관리자 전용)", ephemeral=True)
+        
+        chosen = self.values[0]
+        view.banned_heroes.append(chosen)
+        
+        # 설정된 밴 개수 상한선에 도달했는지 체크
+        if len(view.banned_heroes) >= view.max_bans:
+            await view.execute_final(interaction)
+        else:
+            # 아직 더 밴해야 한다면 3개 드롭다운을 최신화하여 화면 갱신
+            view.update_selects()
+            embed = build_horizontal_embed(view.teams, len(view.teams), "🏆 [밴픽 진행 중]")
+            embed.add_field(name="🚫 현재 금지된 영웅 목록", value=", ".join(view.banned_heroes), inline=False)
+            await interaction.response.edit_message(embed=embed, view=view)
+
 class BanPickView(discord.ui.View):
     def __init__(self, captains, teams, team_channels, ban_count, admin_channel):
         super().__init__(timeout=None)
         self.captains = captains
         self.teams = teams
         self.team_channels = team_channels
-        self.max_bans = ban_count * 2
+        self.max_bans = ban_count * len(teams) # 팀당 n개씩 총합 상한선
         self.banned_heroes = []
         self.admin_channel = admin_channel
-        
-        # 💡 방장님이 사용하시던 영웅 목록 리스트가 있다면 아래 리스트를 알맞게 수정하세요!
-        self.heroes = ["D.Va", "라인하르트", "윈스턴", "자리야", "겐지", "리퍼", "트레이서", "위도우메이커", "캐서디", "아나", "루시우", "메르시", "바티스트", "키리코"] 
+        self.update_selects()
 
-        self.update_select()
-
-    def update_select(self):
-        self.clear_items() # 기존 메뉴를 지우고 새로 그림
-        options = [discord.SelectOption(label=h, value=h) for h in self.heroes if h not in self.banned_heroes]
-        
-        # 디스코드 UI 한계상 메뉴 하나당 옵션은 25개까지만 가능하므로 슬라이싱 보호막 적용
-        select = discord.ui.Select(placeholder=f"🚫 밴할 영웅 선택 (현재 밴: {len(self.banned_heroes)}/{self.max_bans}개)", options=options[:25])
-        
-        async def select_callback(interaction: discord.Interaction):
-            # [보안] 관리자나 주장이 아니면 튕겨냄
-            if not (is_admin(interaction) or interaction.user.id in [c.id for c in self.captains]):
-                return await interaction.response.send_message("❌ 밴픽 조작 권한이 없습니다. (각 팀 주장 전용)", ephemeral=True)
-            
-            hero = select.values[0]
-            self.banned_heroes.append(hero)
-            
-            if len(self.banned_heroes) >= self.max_bans:
-                await self.execute_final(interaction)
-            else:
-                self.update_select()
-                embed = build_horizontal_embed(self.teams, len(self.teams), "🏆 [밴픽 진행 중]")
-                embed.add_field(name="🚫 현재 밴 영웅", value=", ".join(self.banned_heroes), inline=False)
-                await interaction.response.edit_message(embed=embed, view=self)
-
-        select.callback = select_callback
-        self.add_item(select) # 💡 누락되었던 드롭다운 부착 코드 복구
+    def update_selects(self):
+        self.clear_items()
+        # 글로벌 OW_HEROES 데이터 구조를 순회하며 역할군별 드롭다운 배치
+        for role, heroes in OW_HEROES.items():
+            available = [h for h in heroes if h not in self.banned_heroes]
+            if available:
+                self.add_item(BanRoleSelect(role, available, self))
 
     async def execute_final(self, interaction):
         save_data(MATCH_FILE, pack_match_data(self.teams))
         
-        # 1. 밴픽 완료 후 공지 채널 드롭다운 삭제 (view=None) 및 텍스트 전환
+        # 밴픽이 끝나면 공지 채널의 드롭다운을 파괴(view=None)하고 텍스트 박스로 고정
         embed = build_horizontal_embed(self.teams, len(self.teams), "🏆 [내전 매칭 성사] 최종 라인업!")
-        embed.add_field(name="🚫 금지 영웅", value=", ".join(self.banned_heroes) if self.banned_heroes else "없음", inline=False)
+        embed.add_field(name="🚫 금지 영웅 (밴픽 완료)", value=", ".join(self.banned_heroes) if self.banned_heroes else "없음", inline=False)
         await interaction.response.edit_message(content="✅ **(진행 완료) 양 팀의 밴픽이 최종 확정되었습니다!**", embed=embed, view=None)
         
-        # 2. 관리자 채널로 컨트롤 패널 발송
+        # 관리자 조작 창으로 마스터 제어 패널 전송
         ws_code = generate_workshop_code(self.teams, self.banned_heroes)
         await self.admin_channel.send(content="⚙️ **[방장 컨트롤 패널]** 내전 관리를 시작합니다.", view=AdminControlPanel(self.teams, self.team_channels, ws_code, self.captains))
 
