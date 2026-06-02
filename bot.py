@@ -345,23 +345,19 @@ def build_horizontal_embed(teams, team_count, title="🎲 내전 팀 구성 결�
     team_colors = ["🔴 1팀", "🔵 2팀", "🟢 3팀", "🟡 4팀"]
     embed = discord.Embed(title=title, color=discord.Color.gold())
     
-    headers = []
     for i in range(team_count):
-        t_score = sum(scores.get(str(p.id), {}).get("score", 0) for p in teams[i])
-        avg = round(t_score / len(teams[i]), 1) if teams[i] else 0
-        headers.append(f"{team_colors[i]} (평균 {avg})")
+        if i >= len(teams): break
+        team = teams[i]
         
-    max_len = max(len(t) for t in teams) if teams else 0
-    desc = "**" + "\u2003\u2003\u2003".join(headers) + "**\n\n"
-    
-    for row_idx in range(max_len):
-        row_str = ""
-        for t_idx in range(team_count):
-            if row_idx < len(teams[t_idx]): row_str += f"{teams[t_idx][row_idx].mention}\u2003\u2003"
-            else: row_str += "-\u2003\u2003"
-        desc += row_str + "\n"
+        t_score = sum(scores.get(str(p.id), {}).get("score", 0) for p in team)
+        avg = round(t_score / len(team), 1) if team else 0
         
-    embed.description = desc
+        # 각 팀원들을 세로(엔터)로 깔끔하게 정렬
+        members_text = "\n".join([p.mention for p in team]) if team else "없음"
+        
+        # inline=True를 사용해 각각의 독립된 칸(열)으로 깔끔하게 분리
+        embed.add_field(name=f"{team_colors[i]} (평균 {avg})", value=members_text, inline=True)
+        
     return embed
 
 def generate_workshop_code(teams, banned_heroes):
@@ -386,12 +382,12 @@ def generate_workshop_code(teams, banned_heroes):
     ban_strings = ", ".join([f'Hero({h})' for h in banned_heroes]) if banned_heroes else "Empty Array"
     ws_text += f'    Global.Banned_Heroes = Array({ban_strings});\n  }}\n}}\n\n'
     
-    ws_text += 'rule("내전 시스템: 자동 팀 분배 및 관전자 강퇴") {\n  event { Ongoing - Each Player; All; All; }\n  actions {\n'
+    ws_text += 'rule("내전 시스템: 자동 팀 분배 및 관전자 강퇴") {\n  event { Ongoing - Each Player; All; All; }\n  action {\n'
     ws_text += '    If(Array Contains(Global.Team1_Names, Custom String("{0}", Event Player)));\n      Move Player to Team(Event Player, Team 1);\n'
     ws_text += '    Else If(Array Contains(Global.Team2_Names, Custom String("{0}", Event Player)));\n      Move Player to Team(Event Player, Team 2);\n'
     ws_text += '    Else();\n      Move Player to Team(Event Player, Spectator);\n    End;\n  }\n}\n\n'
     
-    ws_text += 'rule("내전 시스템: 영웅 밴픽 제한") {\n  event { Ongoing - Each Player; All; All; }\n  conditions { Has Spawned(Event Player) == True; }\n  actions {\n'
+    ws_text += 'rule("내전 시스템: 영웅 밴픽 제한") {\n  event { Ongoing - Each Player; All; All; }\n  condition { Has Spawned(Event Player) == True; }\n  action {\n'
     ws_text += '    Set Player Allowed Heroes(Event Player, Remove From Array(Allowed Heroes(Event Player), Global.Banned_Heroes));\n  }\n}\n```'
     return ws_text
 
@@ -471,9 +467,9 @@ class BanPickView(discord.ui.View):
                 embed.add_field(name="🚫 금지 영웅 (밴픽)", value=", ".join(self.banned_heroes) if self.banned_heroes else "없음", inline=False)
                 ws_code = generate_workshop_code(self.teams, self.banned_heroes)
                 await ann_channel.send(content="🔔 **내전 매칭 및 밴픽이 확정되었습니다!**", embed=embed)
-                await ann_channel.send(content=f"🛠️ **방장용 워크샵 자동 연동 코드**\n{ws_code}")
+        await interaction.channel.send(content=f"🛠️ **방장용 워크샵 자동 연동 코드**\n{ws_code}")
                 
-        await interaction.response.edit_message(content=f"✅ 밴픽 종료 및 공지 전송 완료! (이동 성공 {move_success}명)", view=None)
+        await interaction.response.edit_message(content=f"✅ 밴픽 종료 및 공지 전송 완료!", view=None)
 
 class BanCountSelectView(discord.ui.View):
     def __init__(self, teams, team_channels):
@@ -594,9 +590,9 @@ class MoveConfirmView(discord.ui.View):
                 embed = build_horizontal_embed(self.teams, len(self.teams), "🏆 [내전 매칭 성사] 최종 라인업! (밴픽 없음)")
                 ws_code = generate_workshop_code(self.teams, []) # 밴픽 영웅 빈 배열 처리
                 await ann_channel.send(content="🔔 **내전 매칭이 확정되었습니다! (밴픽 생략)**", embed=embed)
-                await ann_channel.send(content=f"🛠️ **방장용 워크샵 자동 연동 코드**\n{ws_code}")
+        await interaction.channel.send(content=f"🛠️ **방장용 워크샵 자동 연동 코드**\n{ws_code}")
                 
-        await interaction.response.edit_message(content=f"✅ 밴픽을 건너뛰고 공지를 전송했습니다! (이동 성공 {move_success}명)", view=None)
+        await interaction.response.edit_message(content=f"✅ 밴픽 종료 및 공지 전송 완료!", view=None)
 
 
 # --- 👥 8. 내전 시작 및 인원 제외 UI ---
@@ -694,16 +690,20 @@ async def test_civil_war(ctx):
     if not is_admin(ctx): return await ctx.send("❌ 관리자만 사용할 수 있습니다.")
     scores = load_data(SCORE_FILE)
     
-    if len(scores) < 4:
-        return await ctx.send("❌ 구글 시트에 동기화된 유저 데이터가 최소 4명은 있어야 가상 테스트가 가능합니다! 먼저 `!점수동기화`를 해주세요.")
+    # 💡 [핵심 추가] 내전 점수(score)가 0점보다 큰(유효한) 사람들의 ID만 뽑아냅니다.
+    valid_uids = [uid for uid, data in scores.items() if float(data.get('score', 0)) > 0]
+    
+    if len(valid_uids) < 4:
+        return await ctx.send("❌ 구글 시트에 내전 점수가 등록된 유저가 최소 4명은 있어야 합니다!")
         
-    # 시트에 등록된 유저 중 랜덤으로 최대 8명을 추출하여 가짜 유저 객체로 만듭니다.
-    sample_ids = random.sample(list(scores.keys()), min(8, len(scores)))
+    # 점수가 있는 사람 중에서만 랜덤 8명 추출
+    sample_ids = random.sample(valid_uids, min(8, len(valid_uids)))
+    
     dummy_members = []
     for uid in sample_ids:
         dummy_members.append(DummyUser(int(uid), scores[uid]['nickname']))
         
-    await ctx.send(f"🛠️ **[개발자 테스트 모드 가동]**\n시트 유저 중 랜덤으로 **{len(dummy_members)}명**을 대기실 가상 인원으로 구성했습니다.", view=ExcludeSelectView(dummy_members))
+    await ctx.send(f"🛠️ **[개발자 테스트 모드 가동]**\n점수 등록자 중 랜덤으로 **{len(dummy_members)}명**을 대기실 가상 인원으로 구성했습니다.", view=ExcludeSelectView(dummy_members))
 
 token = os.environ.get('BOT_TOKEN')
 if not token and os.path.exists('token.txt'):
