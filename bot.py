@@ -139,8 +139,8 @@ async def sync_scores(ctx):
                 "max_tier": row[7] if len(row) > 7 and row[7] else "-",
                 "current_tier": row[8] if len(row) > 8 and row[8] else "-",
                 "main_hero": row[9] if len(row) > 9 and row[9] else "-",
-                "wins": row[11] if len(row) > 11 and row[11].isdigit() else "0",
-                "losses": row[12] if len(row) > 12 and row[12].isdigit() else "0"
+                "wins": row[11].strip() if len(row) > 11 else "-",
+                "losses": row[12].strip() if len(row) > 12 else "-"
             }
         save_data(SCORE_FILE, synced_data)
         await status_msg.edit(content=f"✅ 구글 시트 동기화 완료! 총 **{len(synced_data)}명** 업데이트 완료.")
