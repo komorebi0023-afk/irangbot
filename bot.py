@@ -373,7 +373,7 @@ def generate_workshop_code(teams, banned_heroes):
             names.append(f'Custom String("{ingame}")')
         return ", ".join(names)
 
-    ws_text += 'rule("내전 시스템: 기초 설정") {\n  event { Ongoing - Global; }\n  actions {\n'
+    ws_text += 'rule("내전 시스템: 기초 설정") {\n  event { Ongoing - Global; }\n  action {\n'
     if len(teams) > 0: ws_text += f'    Global.Team1_Names = Array({get_ingame_names(teams[0])});\n'
     if len(teams) > 1: ws_text += f'    Global.Team2_Names = Array({get_ingame_names(teams[1])});\n'
     if len(teams) > 2: ws_text += f'    Global.Team3_Names = Array({get_ingame_names(teams[2])});\n'
