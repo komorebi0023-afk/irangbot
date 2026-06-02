@@ -685,14 +685,20 @@ class MoveConfirmView(discord.ui.View):
 
     @discord.ui.button(label="⏩ 밴픽 건너뛰기 (바로 공지)", style=discord.ButtonStyle.gray, row=1)
     async def skip_banpick_entirely(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # ... (이전 코드는 유지)
+        for child in self.children: child.disabled = True
+        
+        # 💡 (복구된 부분) 공지 채널 ID를 불러오고 전적 데이터를 저장합니다.
+        cfg = load_data(CONFIG_FILE)
+        announce_id = cfg.get('announce_id')
+        save_data(MATCH_FILE, pack_match_data(self.teams))
+
         if announce_id:
             ann_channel = bot.get_channel(int(announce_id))
             if ann_channel:
                 embed = build_horizontal_embed(self.teams, len(self.teams), "🏆 [내전 매칭 성사] 최종 라인업! (밴픽 없음)")
                 await ann_channel.send(content="🔔 **내전 매칭이 확정되었습니다! (밴픽 생략)**", embed=embed)
                 
-        # 💡 강제 이동 버튼 대신 통합 관리 패널 띄우기
+        # 강제 이동 버튼 대신 통합 관리 패널 띄우기
         ws_code = generate_workshop_code(self.teams, [])
         await interaction.response.edit_message(content="⚙️ **[방장 컨트롤 패널]** 내전 관리를 시작합니다.", view=AdminControlPanel(self.teams, self.team_channels, ws_code, captains=None))
 
