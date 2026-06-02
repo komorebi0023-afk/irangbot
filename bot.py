@@ -17,7 +17,7 @@ SCORE_FILE = 'scores.json'
 CONFIG_FILE = 'config.json'
 MATCH_FILE = 'latest_match.json'
 
-# --- 🗺️ 오버워치 전장 데이터 ---
+# --- 🗺️ 전장 및 영웅 데이터 ---
 OW_MAPS = {
     "호위": ["66번 국도", "감시기지: 지브롤터", "도라도", "리알토", "샴발리 수도원", "서킷 로얄", "쓰레기촌", "하바나"],
     "혼합": ["눔바니", "미드타운", "블리자드 월드", "아이헨발데", "왕의 길", "파라이수", "할리우드"],
@@ -79,6 +79,7 @@ MAP_IMAGES = {
     "아틀리스": "https://i.namu.wiki/i/xsyZB9oK5zQSZ7uVHgmHbwGZ1imbLIF2SHfO0q4YqKgfq1N2qlN_BlxetBAoLXLHHXuXZiHYYnkz5VefvBecRygQmQzz__1vS-fCLE31Yilv33DP7IMTdtaSwgSSZqpVTz40lvFApVYM-RpCzaOXpg.webp"
 }
 
+# --- 💾 데이터 관리 ---
 def load_data(file_name):
     if os.path.exists(file_name):
         with open(file_name, 'r', encoding='utf-8') as f: return json.load(f)
@@ -107,8 +108,7 @@ def get_google_client():
 async def on_ready():
     print(f'로그인 성공: {bot.user.name} | 모든 기능 통합 버전 가동!')
 
-
-# --- 구글 시트 동기화 ---
+# --- 👑 1. 구글 시트 연동 및 전적 기록 ---
 @bot.command(name='점수동기화')
 async def sync_scores(ctx):
     if not is_admin(ctx): return await ctx.send("❌ 관리자만 사용할 수 있습니다.")
@@ -147,6 +147,7 @@ async def sync_scores(ctx):
     except Exception as e:
         await status_msg.edit(content=f"❌ 동기화 실패:\n```{e}
 ```")
+
 @bot.command(name='내전종료')
 async def end_civil_war(ctx, winner: str = None):
     if not is_admin(ctx): return
@@ -176,8 +177,8 @@ async def end_civil_war(ctx, winner: str = None):
         await status_msg.edit(content=f"🎉 **내전 결과 기록 완료!**\n> 🏆 **{winner}**의 승리로 전적 시트에 자동 저장되었습니다.")
     except Exception as e:
         await status_msg.edit(content=f"❌ 기록 실패:\n```{e}```")
-        
-# --- 📊 프로필 확인 및 이스터에그 ---
+
+# --- 🎯 2. 기본 유틸 및 명령어 (복구 완료) ---
 @bot.command(name='점수')
 async def check_profile(ctx, member: discord.Member = None):
     target = member or ctx.author
@@ -206,8 +207,6 @@ async def check_profile(ctx, member: discord.Member = None):
 async def show_cute_instagram(ctx):
     await ctx.send("🐾 https://www.instagram.com/i.rang0321/")
 
-
-# --- 🛠️ 일반 관리자 유틸 ---
 @bot.command(name='청소')
 async def clear_messages(ctx, amount: int):
     if not is_admin(ctx): return await ctx.send("❌ 관리자 권한이 없습니다.")
@@ -227,6 +226,7 @@ async def add_admin(ctx, member: discord.Member):
     await ctx.send(f"✅ **{member.display_name}** 님이 봇 관리자로 등록되었습니다.")
 
 @bot.command(name='명령어')
+
 async def show_help(ctx):
     embed = discord.Embed(title="🤖 내전 마스터 봇 안내서", color=discord.Color.gold())
     embed.add_field(name="`!점수` / `!점수 @유저`", value="유저의 상세 내전 프로필과 전적, 점수를 확인합니다.", inline=False)
@@ -241,7 +241,7 @@ async def show_help(ctx):
     embed.add_field(name="`!귀여워`", value="비밀 이스터에그 🐾", inline=False)
     await ctx.send(embed=embed)
 
-
+# --- 🔊 3. 채널 설정 및 이동 ---
 @bot.command(name='공지채널설정')
 async def set_announce(ctx):
     if not is_admin(ctx): return
@@ -249,10 +249,10 @@ async def set_announce(ctx):
     config['announce_id'] = ctx.channel.id
     save_data(CONFIG_FILE, config)
     await ctx.send(f'📢 **{ctx.channel.name}** 채널이 [최종 공지 채널]로 등록되었습니다.')
-    
+
 @bot.command(name='대기실설정')
 async def set_lobby(ctx):
-    if not is_admin(ctx) or not ctx.author.voice: return await ctx.send("❌ 채널에 접속한 상태에서 사용하세요.")
+    if not is_admin(ctx) or not ctx.author.voice: return
     config = load_data(CONFIG_FILE)
     config['lobby_id'] = ctx.author.voice.channel.id
     save_data(CONFIG_FILE, config)
@@ -260,13 +260,13 @@ async def set_lobby(ctx):
 
 @bot.command(name='팀채널설정')
 async def set_team_channel(ctx, team_num: int):
-    if not is_admin(ctx) or not ctx.author.voice: return await ctx.send("❌ 채널에 접속한 상태에서 사용하세요.")
+    if not is_admin(ctx) or not ctx.author.voice: return
     config = load_data(CONFIG_FILE)
     if 'team_channels' not in config: config['team_channels'] = {}
     config['team_channels'][str(team_num)] = ctx.author.voice.channel.id
     save_data(CONFIG_FILE, config)
     await ctx.send(f'📢 **{ctx.author.voice.channel.name}** 채널 [{team_num}팀] 등록 완료.')
-
+    
 @bot.command(name='대기실복귀')
 async def return_to_lobby(ctx):
     if not is_admin(ctx): return
@@ -287,14 +287,12 @@ async def return_to_lobby(ctx):
                     except: move_fail += 1
     await status_msg.edit(content=f"✅ 총 **{move_success}명** 대기실 복귀 완료! (실패: {move_fail}명)")
 
-
-# --- 🗺️ 전장 룰렛 UI ---
+# --- 🗺️ 4. 전장 룰렛 UI (복구 완료) ---
 class MapDetailSelect(discord.ui.Select):
     def __init__(self, mode):
         self.mode = mode
         options = [discord.SelectOption(label="🎲 해당 모드 내 무작위", value="랜덤")]
-        for m in OW_MAPS[mode]:
-            options.append(discord.SelectOption(label=m, value=m))
+        for m in OW_MAPS[mode]: options.append(discord.SelectOption(label=m, value=m))
         super().__init__(placeholder=f"{mode} 전장을 고르거나 랜덤을 돌리세요...", options=options)
 
     async def callback(self, interaction: discord.Interaction):
@@ -305,9 +303,7 @@ class MapDetailSelect(discord.ui.Select):
         else:
             result_map = selected
             embed = discord.Embed(title=f"✅ [{self.mode}] 전장 확정!", description=f"이번 내전은 **{result_map}**에서 진행됩니다.", color=discord.Color.green())
-        
-        if result_map in MAP_IMAGES:
-            embed.set_image(url=MAP_IMAGES[result_map])
+        if result_map in MAP_IMAGES: embed.set_image(url=MAP_IMAGES[result_map])
         await interaction.response.edit_message(embed=embed, view=None)
 
 class MapModeSelect(discord.ui.Select):
