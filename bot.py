@@ -437,7 +437,6 @@ class NextSetConfirmView(discord.ui.View):
         if not is_admin(interaction):
             return await interaction.response.send_message("❌ 관리자 권한이 없습니다.", ephemeral=True)
             
-        # 💡 조건문 분기: 이전에 주장을 뽑지 않고 스킵한 상태였다면 주장 수동 선택창으로 회항
         if self.captains is None or len(self.captains) == 0:
             await interaction.response.edit_message(
                 content="👑 이전 판에 밴픽을 스킵하여 주장 데이터가 없습니다. 각 팀의 주장을 드롭다운에서 먼저 선출해 주세요.", 
@@ -445,7 +444,6 @@ class NextSetConfirmView(discord.ui.View):
                 view=ManualCaptainSelectView(self.teams, self.team_channels)
             )
         else:
-            # 주장이 이미 존재하는 연전 상태라면 바로 밴 개수 선택으로 진입
             view = discord.ui.View()
             view.add_item(DirectSelectBanCount(self.captains, self.teams, self.team_channels, interaction.channel))
             await interaction.response.edit_message(content="⚖️ 다음 세트의 밴픽 개수를 정해주세요.", view=view)
@@ -466,13 +464,15 @@ class NextSetConfirmView(discord.ui.View):
 
     @discord.ui.button(label="↩️ 대기실 복귀", style=discord.ButtonStyle.primary, row=1)
     async def return_lobby(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("⏳ 경기 중인 팀원들을 메인 대기실로 복귀시킵니다...", ephemeral=True)
-        main_lobby = None
-        if hasattr(interaction.user, 'voice') and interaction.user.voice:
-            main_lobby = interaction.user.voice.channel
+        await interaction.response.send_message("⏳ 경기 중인 팀원들을 고정 메인 대기실로 복귀시킵니다...", ephemeral=True)
+        
+        # 💡 경기 결과 창에서도 동일하게 등록된 고정 대기실 ID를 바라보도록 조정
+        cfg = load_data(CONFIG_FILE)
+        lobby_id = cfg.get('lobby_id')
+        main_lobby = bot.get_channel(int(lobby_id)) if lobby_id else None
             
         if not main_lobby:
-            return await interaction.edit_original_response(content="❌ 방장님이 현재 메인 음성 채널에 접속해 있어야 플레이어들을 당겨올 수 있습니다.")
+            return await interaction.edit_original_response(content="❌ 고정 메인 대기실 채널을 찾을 수 없습니다. `!대기실설정` 명령어를 다시 확인해 주세요.")
             
         move_success = 0
         for team in self.teams:
@@ -480,7 +480,7 @@ class NextSetConfirmView(discord.ui.View):
                 if hasattr(p, 'voice') and p.voice:
                     try: await p.move_to(main_lobby); move_success += 1
                     except: pass
-        await interaction.edit_original_response(content=f"✅ {move_success}명의 팀원을 대기실({main_lobby.name})로 무사히 복귀시켰습니다!")
+        await interaction.edit_original_response(content=f"✅ {move_success}명의 팀원을 설정된 고정 대기실({main_lobby.name})로 이동시켰습니다!")
 
 class AdminControlPanel(discord.ui.View):
     def __init__(self, teams, team_channels, ws_code, captains):
@@ -488,7 +488,6 @@ class AdminControlPanel(discord.ui.View):
         self.teams, self.team_channels, self.ws_code, self.captains = teams, team_channels, ws_code, captains
 
     async def record_result(self, interaction: discord.Interaction, winner: str):
-        # 1. 먼저 로딩 메시지 전송
         await interaction.response.send_message(f"⏳ 구글 시트에 {winner} 승리 기록을 저장하는 중...", ephemeral=True)
         
         match_data = pack_match_data(self.teams)
@@ -496,7 +495,11 @@ class AdminControlPanel(discord.ui.View):
         if client and sheet_key:
             try:
                 record_sheet = client.open_by_key(sheet_key).worksheet("전적")
-                kst_time = (datetime.utcnow() + timedelta(hours=9)).strftime("%Y-%m-%d %H:%M")
+                
+                # 💡 파이썬 3.12 최신 기준에 맞춰 utcnow() 경고가 발생하지 않는 표준 문법으로 교체
+                import datetime as dt
+                kst_time = (dt.datetime.now(dt.UTC) + dt.timedelta(hours=9)).strftime("%Y-%m-%d %H:%M")
+                
                 row_data = [
                     kst_time, f"{winner} 승리", 
                     ", ".join(match_data.get('t1_nicks', [])), ", ".join(match_data.get('t1_ids', [])), ", ".join(match_data.get('t1_btags', [])),
@@ -506,8 +509,6 @@ class AdminControlPanel(discord.ui.View):
                 
                 for child in self.children: child.disabled = True
                 await interaction.message.edit(content=f"✅ **[{winner} 승리 기록 완료]** 동일한 멤버로 다음 세트를 진행하시겠습니까?", view=NextSetConfirmView(self.teams, self.team_channels, self.captains))
-                
-                # 💡 2. 저장이 끝나면 로딩 메시지를 '완료'로 편집하여 무한 로딩 버그 해결
                 await interaction.edit_original_response(content=f"✅ 구글 시트에 {winner} 승리 기록이 정상적으로 저장되었습니다!")
             except Exception as e:
                 await interaction.edit_original_response(content=f"❌ 기록 실패: {e}")
@@ -522,8 +523,8 @@ class AdminControlPanel(discord.ui.View):
 
     @discord.ui.button(label="🔊 팀원 음성 채널 분배", style=discord.ButtonStyle.secondary, row=1)
     async def move_voice(self, interaction: discord.Interaction, button: discord.ui.Button):
-        button.disabled = True
-        await interaction.response.edit_message(view=self)
+        # 💡 버튼이 잠기지 않고 언제든 여러 번 다시 누를 수 있도록 상시 오픈 구조로 변경
+        await interaction.response.defer(ephemeral=True)
         move_success = 0
         for i, team in enumerate(self.teams):
             ch_id = self.team_channels.get(str(i + 1))
@@ -532,7 +533,7 @@ class AdminControlPanel(discord.ui.View):
                     if hasattr(p, 'voice') and p.voice:
                         try: await p.move_to(bot.get_channel(int(ch_id))); move_success += 1
                         except: pass
-        await interaction.followup.send(f"✅ 이동 성공: {move_success}명", ephemeral=True)
+        await interaction.followup.send(f"✅ 팀원 음성 채널 분배 완료! (이동 성공: {move_success}명)", ephemeral=True)
 
     @discord.ui.button(label="🛠️ 코드 DM 받기", style=discord.ButtonStyle.secondary, row=1)
     async def send_dm(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -544,23 +545,23 @@ class AdminControlPanel(discord.ui.View):
 
     @discord.ui.button(label="↩️ 대기실 복귀", style=discord.ButtonStyle.danger, row=2)
     async def return_lobby(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("⏳ 경기 중인 팀원들을 메인 대기실로 복귀시킵니다...", ephemeral=True)
-        main_lobby = None
-        # 방장이 접속해 있는 채널을 메인 대기실로 우선 간주
-        if hasattr(interaction.user, 'voice') and interaction.user.voice:
-            main_lobby = interaction.user.voice.channel
+        await interaction.response.send_message("⏳ 경기 중인 팀원들을 고정 메인 대기실로 복귀시킵니다...", ephemeral=True)
+        
+        # 💡 방장의 위치와 상관없이 config.json에 등록된 lobby_id를 정밀 타겟팅합니다.
+        cfg = load_data(CONFIG_FILE)
+        lobby_id = cfg.get('lobby_id')
+        main_lobby = bot.get_channel(int(lobby_id)) if lobby_id else None
             
         if not main_lobby:
-            return await interaction.edit_original_response(content="❌ 방장님이 현재 메인 음성 채널에 접속해 있어야 플레이어들을 당겨올 수 있습니다.")
+            return await interaction.edit_original_response(content="❌ 고정 메인 대기실 채널을 찾을 수 없습니다. `!대기실설정` 명령어를 다시 확인해 주세요.")
             
         move_success = 0
-        # 💡 관전자는 제외하고 명단에 있는 1팀, 2팀 멤버들만 타겟팅
         for team in self.teams:
             for p in team:
                 if hasattr(p, 'voice') and p.voice:
                     try: await p.move_to(main_lobby); move_success += 1
                     except: pass
-        await interaction.edit_original_response(content=f"✅ {move_success}명의 팀원을 대기실({main_lobby.name})로 무사히 복귀시켰습니다!")
+        await interaction.edit_original_response(content=f"✅ {move_success}명의 팀원을 설정된 고정 대기실({main_lobby.name})로 이동시켰습니다!")
 
 # --- 🚫 6. 밴픽 시스템 ---
 # [교체] 역할군별 3분할 밴픽이 완전 복구된 BanPickView 및 서브 클래스 덩어리입니다.
