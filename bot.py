@@ -367,6 +367,7 @@ def build_horizontal_embed(teams, team_count, title="🎲 내전 팀 구성 결�
         
     return embed
 
+# [교체] 워크샵 관전자 이동 로직을 제거하고 안전하게 수정한 최종본입니다.
 def generate_workshop_code(teams, banned_heroes):
     scores = load_data(SCORE_FILE)
     ws_text = "```javascript\n// 워크샵 스크립트 (복사해서 붙여넣기)\n"
@@ -387,15 +388,19 @@ def generate_workshop_code(teams, banned_heroes):
     if len(teams) > 3: ws_text += f'    Global.Team4_Names = Array({get_ingame_names(teams[3])});\n'
     
     ban_strings = ", ".join([f'Hero({h})' for h in banned_heroes]) if banned_heroes else "Empty Array"
+    
+    # 💡 f-string 내부 중괄호 버그 수정된 부분 (}} 두 번 겹치기)
     ws_text += f'    Global.Banned_Heroes = Array({ban_strings});\n  }}\n}}\n\n'
     
-    ws_text += 'rule("내전 시스템: 자동 팀 분배 및 관전자 강퇴") {\n  event { Ongoing - Each Player; All; All; }\n  action {\n'
+    # 💡 관전자(Spectator) 강제 이동 부분을 완전히 삭제했습니다.
+    ws_text += 'rule("내전 시스템: 자동 팀 분배") {\n  event { Ongoing - Each Player; All; All; }\n  action {\n'
     ws_text += '    If(Array Contains(Global.Team1_Names, Custom String("{0}", Event Player)));\n      Move Player to Team(Event Player, Team 1, -1);\n'
     ws_text += '    Else If(Array Contains(Global.Team2_Names, Custom String("{0}", Event Player)));\n      Move Player to Team(Event Player, Team 2, -1);\n'
-    ws_text += '    Else();\n      Move Player to Team(Event Player, Spectator, -1);\n    End;\n  }\n}\n\n'
+    ws_text += '    End;\n  }\n}\n\n'
     
-    ws_text += 'rule("내전 시스템: 영웅 밴픽 제한") {\n  event { Ongoing - Each Player; All; All; }\n  condition { Has Spawned(Event Player) == True; }\n  action {\n'
+    ws_text += 'rule("내전 시스템: 영웅 밴픽 제한") {\n  event { Ongoing - Each Player; All; All; }\n  conditions { Has Spawned(Event Player) == True; }\n  action {\n'
     ws_text += '    Set Player Allowed Heroes(Event Player, Remove From Array(Allowed Heroes(Event Player), Global.Banned_Heroes));\n  }\n}\n```'
+    
     return ws_text
 
 
