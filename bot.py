@@ -563,11 +563,40 @@ class MoveConfirmView(discord.ui.View):
     async def manual_swap(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(content="🔄 맞교환할 인원을 선택하세요.", view=SwapView(self.teams, self.team_channels, self.members))
         
+    # [수정 구간] MoveConfirmView 클래스 내부의 finalize_move 함수를 아래로 교체하고, 바로 밑에 기능을 추가합니다.
     @discord.ui.button(label="🚀 [최종 확정] 밴픽 넘어가기", style=discord.ButtonStyle.green, row=1)
     async def finalize_move(self, interaction: discord.Interaction, button: discord.ui.Button):
         cfg = load_data(CONFIG_FILE)
         if 'announce_id' not in cfg: return await interaction.response.send_message("❌ `!공지채널설정`이 되어 있지 않습니다!", ephemeral=True)
         await interaction.response.edit_message(content="✅ 팀 편성이 완료되었습니다. 밴픽을 진행합니다!", embed=None, view=BanCountSelectView(self.teams, self.team_channels))
+
+    # 💡 [새로 추가되는 버튼] 밴픽을 건너뛰고 바로 최종 라인업을 공지 채널로 전송합니다.
+    @discord.ui.button(label="⏩ 밴픽 건너뛰기 (바로 공지)", style=discord.ButtonStyle.gray, row=1)
+    async def skip_banpick_entirely(self, interaction: discord.Interaction, button: discord.ui.Button):
+        for child in self.children: child.disabled = True
+        cfg = load_data(CONFIG_FILE)
+        announce_id = cfg.get('announce_id')
+        
+        # 1. 즉시 팀원 자동 이동 실행
+        move_success = 0
+        for i, team in enumerate(self.teams):
+            ch_id = self.team_channels.get(str(i + 1))
+            if ch_id and bot.get_channel(int(ch_id)):
+                for p in team:
+                    if p.voice:
+                        try: await p.move_to(bot.get_channel(int(ch_id))); move_success += 1
+                        except: pass
+
+        # 2. 밴픽 없이 공지 채널로 결과 전송
+        if announce_id:
+            ann_channel = bot.get_channel(int(announce_id))
+            if ann_channel:
+                embed = build_horizontal_embed(self.teams, len(self.teams), "🏆 [내전 매칭 성사] 최종 라인업! (밴픽 없음)")
+                ws_code = generate_workshop_code(self.teams, []) # 밴픽 영웅 빈 배열 처리
+                await ann_channel.send(content="🔔 **내전 매칭이 확정되었습니다! (밴픽 생략)**", embed=embed)
+                await ann_channel.send(content=f"🛠️ **방장용 워크샵 자동 연동 코드**\n{ws_code}")
+                
+        await interaction.response.edit_message(content=f"✅ 밴픽을 건너뛰고 공지를 전송했습니다! (이동 성공 {move_success}명)", view=None)
 
 
 # --- 👥 8. 내전 시작 및 인원 제외 UI ---
@@ -648,14 +677,7 @@ async def start_civil_war(ctx):
     if len(mems) < 2: return await ctx.send("❌ 대기실 인원 부족!")
     await ctx.send(f"📋 **현재 대기실 인원:** {len(mems)}명", view=ExcludeSelectView(mems))
 
-
-# --- 🚀 봇 실행 ---
-token = os.environ.get('BOT_TOKEN')
-if not token and os.path.exists('token.txt'):
-    with open('token.txt', 'r', encoding='utf-8') as f: token = f.read().strip()
-if token: bot.run(token)
-else: print("❌ 토큰 오류")
-
+# ==========================================
 class DummyUser:
     def __init__(self, uid, name):
         self.id = uid
@@ -663,25 +685,28 @@ class DummyUser:
         self.mention = f"<@{uid}>" # 태그 파랗게 보이게 설정
         self.voice = True # 음성 채널에 있는 것처럼 속임
 
-    # 채널 이동 명령을 받으면 에러 안 내고 그냥 패스하는 가짜 함수
+    # 채널 이동 명령을 받으면 에러 없이 무시하는 가짜 함수
     async def move_to(self, channel):
         pass
 
 @bot.command(name='테스트시작')
 async def test_civil_war(ctx):
-    if not is_admin(ctx): return
+    if not is_admin(ctx): return await ctx.send("❌ 관리자만 사용할 수 있습니다.")
     scores = load_data(SCORE_FILE)
     
     if len(scores) < 4:
-        return await ctx.send("❌ 시트에 동기화된 유저가 최소 4명은 있어야 테스트가 가능합니다!")
+        return await ctx.send("❌ 구글 시트에 동기화된 유저 데이터가 최소 4명은 있어야 가상 테스트가 가능합니다! 먼저 `!점수동기화`를 해주세요.")
         
-    # 구글 시트에 있는 사람 중 랜덤으로 최대 8명을 뽑아옵니다.
-    import random
+    # 시트에 등록된 유저 중 랜덤으로 최대 8명을 추출하여 가짜 유저 객체로 만듭니다.
     sample_ids = random.sample(list(scores.keys()), min(8, len(scores)))
-    
-    # 가짜 유저 객체 8명 생성
     dummy_members = []
     for uid in sample_ids:
-        dummy_members.append(DummyUser(uid, scores[uid]['nickname']))
+        dummy_members.append(DummyUser(int(uid), scores[uid]['nickname']))
         
-    await ctx.send(f"🛠️ **[개발자 테스트 모드]**\n시트에서 랜덤으로 **{len(dummy_members)}명**을 뽑아 가상 내전을 시작합니다!", view=ExcludeSelectView(dummy_members))
+    await ctx.send(f"🛠️ **[개발자 테스트 모드 가동]**\n시트 유저 중 랜덤으로 **{len(dummy_members)}명**을 대기실 가상 인원으로 구성했습니다.", view=ExcludeSelectView(dummy_members))
+
+token = os.environ.get('BOT_TOKEN')
+if not token and os.path.exists('token.txt'):
+    with open('token.txt', 'r', encoding='utf-8') as f: token = f.read().strip()
+if token: bot.run(token)
+else: print("❌ 토큰 오류")
