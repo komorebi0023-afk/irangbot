@@ -655,3 +655,33 @@ if not token and os.path.exists('token.txt'):
     with open('token.txt', 'r', encoding='utf-8') as f: token = f.read().strip()
 if token: bot.run(token)
 else: print("❌ 토큰 오류")
+
+class DummyUser:
+    def __init__(self, uid, name):
+        self.id = uid
+        self.display_name = name
+        self.mention = f"<@{uid}>" # 태그 파랗게 보이게 설정
+        self.voice = True # 음성 채널에 있는 것처럼 속임
+
+    # 채널 이동 명령을 받으면 에러 안 내고 그냥 패스하는 가짜 함수
+    async def move_to(self, channel):
+        pass
+
+@bot.command(name='테스트시작')
+async def test_civil_war(ctx):
+    if not is_admin(ctx): return
+    scores = load_data(SCORE_FILE)
+    
+    if len(scores) < 4:
+        return await ctx.send("❌ 시트에 동기화된 유저가 최소 4명은 있어야 테스트가 가능합니다!")
+        
+    # 구글 시트에 있는 사람 중 랜덤으로 최대 8명을 뽑아옵니다.
+    import random
+    sample_ids = random.sample(list(scores.keys()), min(8, len(scores)))
+    
+    # 가짜 유저 객체 8명 생성
+    dummy_members = []
+    for uid in sample_ids:
+        dummy_members.append(DummyUser(uid, scores[uid]['nickname']))
+        
+    await ctx.send(f"🛠️ **[개발자 테스트 모드]**\n시트에서 랜덤으로 **{len(dummy_members)}명**을 뽑아 가상 내전을 시작합니다!", view=ExcludeSelectView(dummy_members))
