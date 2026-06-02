@@ -146,7 +146,6 @@ async def sync_scores(ctx):
         await status_msg.edit(content=f"✅ 구글 시트 동기화 완료! 총 **{len(synced_data)}명** 업데이트 완료.")
     except Exception as e:
         await status_msg.edit(content=f"❌ 동기화 실패:\n```{e}```")
-```")
 
 @bot.command(name='내전종료')
 async def end_civil_war(ctx, winner: str = None):
