@@ -387,7 +387,7 @@ def generate_workshop_code(teams, banned_heroes):
     if len(teams) > 3: ws_text += f'    Global.Team4_Names = Array({get_ingame_names(teams[3])});\n'
     
     ban_strings = ", ".join([f'Hero({h})' for h in banned_heroes]) if banned_heroes else "Empty Array"
-    ws_text += f'    Global.Banned_Heroes = Array({ban_strings});\n  }\n}\n\n'
+    ws_text += f'    Global.Banned_Heroes = Array({ban_strings});\n  }}\n}}\n\n'
     
     ws_text += 'rule("내전 시스템: 자동 팀 분배 및 관전자 강퇴") {\n  event { Ongoing - Each Player; All; All; }\n  action {\n'
     ws_text += '    If(Array Contains(Global.Team1_Names, Custom String("{0}", Event Player)));\n      Move Player to Team(Event Player, Team 1, -1);\n'
