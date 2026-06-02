@@ -476,6 +476,57 @@ class TeamCountSelect(discord.ui.Select):
         view.add_item(TeamDivideButton(int(self.values[0]), self.members))
         await interaction.response.edit_message(content=f"👥 {self.values[0]}개 팀 선택됨.", view=view)
 
+# --- 💡 신규 추가: 관전자(제외 인원) 선택 UI ---
+class ExcludeSelectView(discord.ui.View):
+    def __init__(self, members):
+        super().__init__(timeout=None)
+        self.members = members
+        self.excluded_ids = []
+        
+        options = [discord.SelectOption(label=m.display_name, value=str(m.id)) for m in members]
+        
+        # 디스코드 Select 한도에 맞춰 최대 25명까지만 옵션 제공 (일반적인 내전 인원은 10~15명이므로 충분함)
+        self.select = discord.ui.Select(
+            placeholder="제외할 유저가 있다면 선택하세요 (다중 선택 가능)",
+            min_values=1,
+            max_values=min(len(options), 25),
+            options=options[:25]
+        )
+        
+        async def select_callback(interaction: discord.Interaction):
+            self.excluded_ids = self.select.values
+            await interaction.response.defer() # 체크만 하고 로딩 화면 넘김
+            
+        self.select.callback = select_callback
+        self.add_item(self.select)
+
+    @discord.ui.button(label="✅ 선택 유저 제외하고 다음", style=discord.ButtonStyle.primary, row=1)
+    async def confirm_exclude(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.excluded_ids:
+            return await interaction.response.send_message("❌ 제외할 유저를 위에서 선택해 주세요. 제외할 인원이 없다면 우측 버튼을 눌러주세요.", ephemeral=True)
+            
+        # 선택된 인원을 제외하고 실제 플레이할 인원만 필터링
+        filtered = [m for m in self.members if str(m.id) not in self.excluded_ids]
+        
+        if len(filtered) < 2:
+            return await interaction.response.send_message("❌ 남은 인원이 너무 적어 팀을 나눌 수 없습니다!", ephemeral=True)
+            
+        view = discord.ui.View()
+        view.add_item(TeamCountSelect(filtered))
+        await interaction.response.edit_message(
+            content=f"📋 참여 인원: **{len(filtered)}명** (관전/제외 {len(self.excluded_ids)}명)\n아래 메뉴에서 팀 개수를 골라주세요.", 
+            view=view
+        )
+
+    @discord.ui.button(label="🚀 제외 없이 전원 포함 시작", style=discord.ButtonStyle.green, row=1)
+    async def skip_exclude(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = discord.ui.View()
+        view.add_item(TeamCountSelect(self.members))
+        await interaction.response.edit_message(
+            content=f"📋 참여 인원: **{len(self.members)}명** (전원 포함)\n아래 메뉴에서 팀 개수를 골라주세요.", 
+            view=view
+        )
+
 @bot.command(name='내전시작')
 async def start_civil_war(ctx):
     if not is_admin(ctx): return await ctx.send("❌ 관리자 권한이 없습니다.")
@@ -486,11 +537,11 @@ async def start_civil_war(ctx):
     if not lobby: return await ctx.send("❌ 등록된 대기실 채널을 찾을 수 없습니다.")
     
     mems = [m for m in lobby.members if not m.bot]
-    if not mems: return await ctx.send("❌ 대기실에 접속해 있는 유저가 없습니다!")
+    if len(mems) < 2: return await ctx.send("❌ 대기실에 접속해 있는 유저가 부족합니다!")
     
-    view = discord.ui.View()
-    view.add_item(TeamCountSelect(mems))
-    await ctx.send(f"📋 대기실 {len(mems)}명", view=view)
+    # 먼저 인원 제외 확인 뷰를 띄워줍니다.
+    view = ExcludeSelectView(mems)
+    await ctx.send(f"📋 **현재 대기실 인원:** {len(mems)}명\n내전에서 제외할 인원(관전자 등)이 있다면 선택해 주세요.", view=view)
 
 # --- 🚀 봇 실행 (토큰 안전 처리) ---
 token = os.environ.get('BOT_TOKEN')
