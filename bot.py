@@ -392,8 +392,7 @@ def generate_workshop_code(teams, banned_heroes):
     ws_text += '    Else();\n      Move Player to Team(Event Player, Spectator);\n    End;\n  }\n}\n\n'
     
     ws_text += 'rule("내전 시스템: 영웅 밴픽 제한") {\n  event { Ongoing - Each Player; All; All; }\n  conditions { Has Spawned(Event Player) == True; }\n  actions {\n'
-    ws_text += '    Set Player Allowed Heroes(Event Player, Remove From Array(Allowed Heroes(Event Player), Global.Banned_Heroes));\n  }\n}\n
-```'
+    ws_text += '    Set Player Allowed Heroes(Event Player, Remove From Array(Allowed Heroes(Event Player), Global.Banned_Heroes));\n  }\n}\n```'
     return ws_text
 
 
