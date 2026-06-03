@@ -800,7 +800,7 @@ class NextSetConfirmView(discord.ui.View):
                     except: pass
         await interaction.edit_original_response(content=f"✅ {move_success}명의 팀원을 대기실({main_lobby.name})로 복귀시켰습니다!")
 
-# 💡 [새로 추가됨] 배팅 모달(팝업) 및 5분 타이머 뷰 클래스
+# 💡 [업데이트됨] 배팅 모달 및 타이머 뷰 (선수 배팅 차단 로직 추가)
 class BetModal(discord.ui.Modal, title="💰 포인트 배팅"):
     amount_input = discord.ui.TextInput(label="배팅할 금액 (숫자 또는 '올인')", placeholder="예: 500, 올인")
 
@@ -813,6 +813,12 @@ class BetModal(discord.ui.Modal, title="💰 포인트 배팅"):
         if not global_betting.active: return await interaction.response.send_message("❌ 이미 배팅이 마감되었습니다.", ephemeral=True)
 
         uid = str(interaction.user.id)
+        
+        # 💡 [새로 추가된 차단 로직] 현재 경기에 참여 중인 선수인지 확인합니다.
+        is_player = any(uid == str(p.id) for team in self.b_view.teams for p in team)
+        if is_player:
+            return await interaction.response.send_message("❌ 현재 경기에 참여 중인 선수는 배팅할 수 없습니다!", ephemeral=True)
+
         opp_team = "2팀" if self.team_name == "1팀" else "1팀"
         if uid in global_betting.bets[opp_team]:
             return await interaction.response.send_message("❌ 이미 반대 팀에 배팅하셨습니다! 양방향 배팅은 불가능합니다.", ephemeral=True)
@@ -835,9 +841,10 @@ class BetModal(discord.ui.Modal, title="💰 포인트 배팅"):
         await interaction.followup.send(f"✅ **{self.team_name}**에 **{bet_amt:,} P**를 배팅했습니다! (남은 잔액: {bal - bet_amt:,} P)", ephemeral=True)
 
 class BettingView(discord.ui.View):
-    def __init__(self, msg):
+    def __init__(self, msg, teams):
         super().__init__(timeout=None)
         self.msg = msg
+        self.teams = teams # 💡 선수 차단을 위해 팀 정보 넘겨받기
         global_betting.active = True
         global_betting.bets = {"1팀": {}, "2팀": {}}
         global_betting.ann_msg = msg
@@ -931,7 +938,7 @@ class NextSetConfirmView(discord.ui.View):
         embed = build_horizontal_embed(self.teams, len(self.teams), ann_title)
         
         ann_msg_obj = await ann_ch.send(content=ann_msg, embed=embed)
-        bet_view = BettingView(ann_msg_obj)
+        bet_view = BettingView(ann_msg_obj, self.teams) # 💡 선수 검증용 팀 데이터 전달
         await ann_msg_obj.edit(view=bet_view)
         await bet_view.update_msg()
         
@@ -969,14 +976,12 @@ class AdminControlPanel(discord.ui.View):
 
     async def record_result(self, interaction: discord.Interaction, winner: str, team_idx: int):
         await interaction.response.send_message(f"⏳ 구글 시트에 기록 및 배팅 정산 중...", ephemeral=True)
-        if global_betting.active: global_betting.active = False # 조기 종료 시 배팅 마감
+        if global_betting.active: global_betting.active = False
         
-        # 1. 선수 보상 지급
         for i, team in enumerate(self.teams):
             reward = 300 if (i == team_idx) else 100
             for p in team: add_points(p.id, reward)
 
-        # 2. 치지직식 배팅 정산
         p_win = sum(global_betting.bets[winner].values())
         opp_team = "1팀" if winner == "2팀" else "2팀"
         p_lose = sum(global_betting.bets[opp_team].values())
@@ -993,7 +998,6 @@ class AdminControlPanel(discord.ui.View):
                     profit = int(amt * ratio)
                     add_points(uid, amt + profit)
                     
-        # 3. 공지 메시지 업데이트
         if self.ann_msg_obj:
             try:
                 embed = self.ann_msg_obj.embeds[0]
@@ -1004,7 +1008,6 @@ class AdminControlPanel(discord.ui.View):
                 await self.ann_msg_obj.edit(content=f"🎉 **{winner}이(가) 승리했습니다!**" + bet_results_text, embed=embed, view=None)
             except: pass
 
-        # 4. 시트 전적 기록
         match_data = pack_match_data(self.teams)
         client, sheet_key = get_google_client()
         if client and sheet_key:
@@ -1131,7 +1134,7 @@ class BanPickView(discord.ui.View):
         await interaction.response.edit_message(content=ann_msg, embed=embed, view=None)
         
         ann_msg_obj = interaction.message
-        bet_view = BettingView(ann_msg_obj)
+        bet_view = BettingView(ann_msg_obj, self.teams) # 💡 선수 검증용 팀 데이터 전달
         await ann_msg_obj.edit(view=bet_view)
         await bet_view.update_msg()
         
@@ -1215,7 +1218,7 @@ class MoveConfirmView(discord.ui.View):
                 embed = build_horizontal_embed(self.teams, len(self.teams), ann_title)
                 
                 ann_msg_obj = await ann_channel.send(content=ann_msg, embed=embed)
-                bet_view = BettingView(ann_msg_obj)
+                bet_view = BettingView(ann_msg_obj, self.teams) # 💡 선수 검증용 팀 데이터 전달
                 await ann_msg_obj.edit(view=bet_view)
                 await bet_view.update_msg()
                 
