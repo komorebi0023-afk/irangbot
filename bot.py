@@ -662,36 +662,6 @@ class BanCountSelectView(discord.ui.View):
         await interaction.response.edit_message(content="⚖️ 영웅 밴픽 모드 설정 중...", view=view)
 
 
-# --- 👥 7. 팀 분배 및 수동 교환 UI ---
-class SwapView(discord.ui.View):
-    def __init__(self, teams, team_channels, members):
-        super().__init__(timeout=None)
-        self.teams, self.team_channels, self.members = teams, team_channels, members
-        options = [discord.SelectOption(label=p.display_name, value=str(p.id)) for t in teams for p in t]
-        self.s1 = discord.ui.Select(placeholder="🔄 첫 번째 유저...", options=options, custom_id="swap_1")
-        self.s2 = discord.ui.Select(placeholder="🔄 두 번째 유저...", options=options, custom_id="swap_2")
-        async def dummy(interaction): await interaction.response.defer()
-        self.s1.callback = self.s2.callback = dummy
-        self.add_item(self.s1)
-        self.add_item(self.s2)
-
-    @discord.ui.button(label="🔄 교환 실행", style=discord.ButtonStyle.green, row=2)
-    async def execute_swap(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not self.s1.values or not self.s2.values or self.s1.values[0] == self.s2.values[0]: return await interaction.response.send_message("❌ 서로 다른 두 명을 선택하세요!", ephemeral=True)
-        u1_id, u2_id = self.s1.values[0], self.s2.values[0]
-        u1_pos, u2_pos = None, None
-        for t_idx, team in enumerate(self.teams):
-            for p_idx, p in enumerate(team):
-                if str(p.id) == u1_id: u1_pos = (t_idx, p_idx)
-                if str(p.id) == u2_id: u2_pos = (t_idx, p_idx)
-        p1, p2 = self.teams[u1_pos[0]][u1_pos[1]], self.teams[u2_pos[0]][u2_pos[1]]
-        self.teams[u1_pos[0]][u1_pos[1]], self.teams[u2_pos[0]][u2_pos[1]] = p2, p1
-        
-        embed = build_horizontal_embed(self.teams, len(self.teams), "⚖️ 내전 밸런스 조정 중 (수동 교체됨)")
-        await interaction.response.edit_message(content="✅ 교환 완료!", embed=embed, view=MoveConfirmView(self.teams, self.team_channels, self.members))
-
-# [추가 및 교체] 기존 MoveConfirmView 클래스 전체를 아래 코드로 완전히 교체합니다.
-
 # 🔊 공지 및 세팅이 다 끝난 후 최종 이동만 수행하는 독립된 버튼 뷰
 class FinalVoiceMoveView(discord.ui.View):
     def __init__(self, teams, team_channels):
@@ -724,56 +694,6 @@ def pack_match_data(teams):
     t1_n, t1_i, t1_b = get_fields(teams[0]) if len(teams) > 0 else ([], [], [])
     t2_n, t2_i, t2_b = get_fields(teams[1]) if len(teams) > 1 else ([], [], [])
     return {"t1_nicks": t1_n, "t1_ids": t1_i, "t1_btags": t1_b, "t2_nicks": t2_n, "t2_ids": t2_i, "t2_btags": t2_b}
-
-class MoveConfirmView(discord.ui.View):
-    def __init__(self, teams, team_channels, members):
-        super().__init__(timeout=None)
-        self.teams, self.team_channels, self.members = teams, team_channels, members
-
-    @discord.ui.button(label="🔄 랜덤 다시 짜기", style=discord.ButtonStyle.blurple)
-    async def reroll_teams(self, interaction: discord.Interaction, button: discord.ui.Button):
-        scores = load_data(SCORE_FILE)
-        p_data = [(m, scores[str(m.id)].get("score", 0), scores[str(m.id)].get("score", 0) + random.uniform(-1.0, 1.0)) for m in self.members if str(m.id) in scores]
-        p_data.sort(key=lambda x: x[2], reverse=True)
-        new_teams = [[] for _ in range(len(self.teams))]
-        t_scores = [0] * len(self.teams)
-        for p, act, _ in p_data:
-            idx = t_scores.index(min(t_scores))
-            new_teams[idx].append(p)
-            t_scores[idx] += act
-        self.teams = new_teams
-        embed = build_horizontal_embed(self.teams, len(self.teams), "⚖️ 내전 밸런스 (재배치됨)")
-        await interaction.response.edit_message(embed=embed, view=self)
-
-    @discord.ui.button(label="👥 수동 팀원 교체", style=discord.ButtonStyle.secondary)
-    async def manual_swap(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.edit_message(content="🔄 맞교환할 인원을 선택하세요.", view=SwapView(self.teams, self.team_channels, self.members))
-        
-    @discord.ui.button(label="👑 [최종 확정] 주장 선택 및 밴픽", style=discord.ButtonStyle.danger, row=1)
-    async def finalize_move(self, interaction: discord.Interaction, button: discord.ui.Button):
-        cfg = load_data(CONFIG_FILE)
-        if 'announce_id' not in cfg: return await interaction.response.send_message("❌ `!공지채널설정`이 되어 있지 않습니다!", ephemeral=True)
-        # 💡 바로 밴픽으로 가지 않고 수동 주장 선택창 전출
-        await interaction.response.edit_message(content="👑 각 팀의 주장을 드롭다운 메뉴에서 직접 선출해 주세요.", embed=None, view=ManualCaptainSelectView(self.teams, self.team_channels))
-
-    @discord.ui.button(label="⏩ 밴픽 건너뛰기 (바로 공지)", style=discord.ButtonStyle.gray, row=1)
-    async def skip_banpick_entirely(self, interaction: discord.Interaction, button: discord.ui.Button):
-        for child in self.children: child.disabled = True
-        
-        # 💡 (복구된 부분) 공지 채널 ID를 불러오고 전적 데이터를 저장합니다.
-        cfg = load_data(CONFIG_FILE)
-        announce_id = cfg.get('announce_id')
-        save_data(MATCH_FILE, pack_match_data(self.teams))
-
-        if announce_id:
-            ann_channel = bot.get_channel(int(announce_id))
-            if ann_channel:
-                embed = build_horizontal_embed(self.teams, len(self.teams), "🏆 [내전 매칭 성사] 최종 라인업! (밴픽 없음)")
-                await ann_channel.send(content="🔔 **내전 매칭이 확정되었습니다! (밴픽 생략)**", embed=embed)
-                
-        # 강제 이동 버튼 대신 통합 관리 패널 띄우기
-        ws_code = generate_workshop_code(self.teams, [])
-        await interaction.response.edit_message(content="⚙️ **[방장 컨트롤 패널]** 내전 관리를 시작합니다.", view=AdminControlPanel(self.teams, self.team_channels, ws_code, captains=None))
 
 # [새로 추가] 기존에 없던 주장 수동 선택용 드롭다운 UI 클래스입니다.
 class ManualCaptainSelectView(discord.ui.View):
@@ -837,45 +757,162 @@ class ManualCaptainSelectView(discord.ui.View):
         view.add_item(DirectSelectBanCount(captains, self.teams, self.team_channels))
         await interaction.response.edit_message(content="⚖️ 영웅 밴픽 개수를 정해주세요.", view=view)
 
-# --- 👥 8. 내전 시작 및 인원 제외 UI ---
+# --- 👑 특수 조건 밸런싱 알고리즘 ---
+def divide_teams_with_conditions(members, t_count, scores, conditions):
+    # 1. 듀오 그룹화 (Union-Find)
+    parent = {m.id: m.id for m in members}
+    def find(i):
+        if parent[i] == i: return i
+        parent[i] = find(parent[i])
+        return parent[i]
+    def union(i, j):
+        root_i, root_j = find(i), find(j)
+        if root_i != root_j: parent[root_i] = root_j
+
+    for u1, u2 in conditions['duos']:
+        if u1 in parent and u2 in parent: union(u1, u2)
+
+    super_nodes = {}
+    for m in members:
+        root = find(m.id)
+        if root not in super_nodes: super_nodes[root] = []
+        super_nodes[root].append(m)
+    sn_list = list(super_nodes.values())
+
+    # 2. 라이벌 제약 조건 맵핑
+    rival_graph = {i: set() for i in range(len(sn_list))}
+    for u1, u2 in conditions['rivals']:
+        if u1 in parent and u2 in parent:
+            r1, r2 = find(u1), find(u2)
+            if r1 == r2: return None, f"❌ 모순된 조건: <@{u1}>님과 <@{u2}>님은 같은 듀오 그룹인데 라이벌로도 설정되었습니다!"
+            idx1, idx2 = list(super_nodes.keys()).index(r1), list(super_nodes.keys()).index(r2)
+            rival_graph[idx1].add(idx2)
+            rival_graph[idx2].add(idx1)
+
+    # 3. DFS 백트래킹으로 모든 조건 탐색 및 최적 밸런스 찾기
+    best_teams = None
+    best_cost = float('inf')
+    teams_sn = [[] for _ in range(t_count)]
+    team_scores = [0] * t_count
+    team_sizes = [0] * t_count
+
+    def dfs(node_idx):
+        nonlocal best_teams, best_cost
+        if node_idx == len(sn_list):
+            avg_score = sum(team_scores) / t_count
+            variance = sum((s - avg_score)**2 for s in team_scores)
+            size_penalty = sum(abs(sz - len(members)/t_count) for sz in team_sizes) * 10000 
+            total_cost = variance + size_penalty 
+            
+            if total_cost < best_cost:
+                best_cost = total_cost
+                real_teams = [[] for _ in range(t_count)]
+                for t_i in range(t_count):
+                    for sn_i in teams_sn[t_i]: real_teams[t_i].extend(sn_list[sn_i])
+                best_teams = real_teams
+            return
+
+        sn = sn_list[node_idx]
+        sn_size = len(sn)
+        sn_score = sum(float(scores.get(str(m.id), {}).get("score", 0)) for m in sn)
+
+        for t_idx in range(t_count):
+            conflict = any(existing in rival_graph[node_idx] for existing in teams_sn[t_idx])
+            if conflict: continue
+
+            teams_sn[t_idx].append(node_idx)
+            team_scores[t_idx] += sn_score
+            team_sizes[t_idx] += sn_size
+            dfs(node_idx + 1)
+            teams_sn[t_idx].pop()
+            team_scores[t_idx] -= sn_score
+            team_sizes[t_idx] -= sn_size
+
+    dfs(0)
+    if not best_teams: return None, "❌ 현재 설정된 듀오/라이벌 조건을 모두 만족하며 팀을 나눌 방법이 없습니다! 조건을 완화해 주세요."
+    return best_teams, None
+
+
+# --- 👥 팀 설정 UI 흐름 ---
 class TeamDivideButton(discord.ui.Button):
-    def __init__(self, t_count, members):
-        super().__init__(label="🎲 팀 나누기 실행", style=discord.ButtonStyle.primary)
-        self.t_count, self.members = t_count, members
+    def __init__(self, t_count, members, conditions):
+        super().__init__(label="🎲 밸런스 매칭 실행", style=discord.ButtonStyle.primary)
+        self.t_count, self.members, self.conditions = t_count, members, conditions
 
     async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
         scores = load_data(SCORE_FILE)
         chans = load_data(CONFIG_FILE).get('team_channels', {})
-        p_data, unreg = [], []
+        unreg = [m.display_name for m in self.members if str(m.id) not in scores]
+        if unreg: return await interaction.followup.send(f"❌ 정보 미등록 유저: {', '.join(unreg)}\n`!점수동기화`를 확인하세요.", ephemeral=True)
         
-        for m in self.members:
-            if str(m.id) in scores and "score" in scores[str(m.id)]:
-                p_data.append((m, scores[str(m.id)]["score"]))
-            else: unreg.append(m.display_name)
-            
-        if unreg: return await interaction.response.send_message(f"❌ 정보 미등록 유저: {', '.join(unreg)}\n관리자에게 `!점수동기화`를 요청하세요.", ephemeral=True)
-        
-        p_data.sort(key=lambda x: x[1], reverse=True)
-        teams = [[] for _ in range(self.t_count)]
-        t_scores = [0] * self.t_count
-        for p, sc in p_data:
-            idx = t_scores.index(min(t_scores))
-            teams[idx].append(p)
-            t_scores[idx] += sc
+        teams, error_msg = divide_teams_with_conditions(self.members, self.t_count, scores, self.conditions)
+        if error_msg: return await interaction.followup.send(error_msg, ephemeral=True)
             
         embed = build_horizontal_embed(teams, self.t_count, "⚖️ 내전 밸런스 1차 편성")
-        await interaction.response.edit_message(embed=embed, view=MoveConfirmView(teams, chans, self.members))
+        await interaction.message.edit(embed=embed, view=MoveConfirmView(teams, chans, self.members, self.conditions))
 
 class TeamCountSelect(discord.ui.Select):
-    def __init__(self, members):
+    def __init__(self, members, conditions):
         options = [discord.SelectOption(label=f"{i}개 팀으로 나누기", value=str(i)) for i in range(2, 5)]
         super().__init__(placeholder="팀 개수 선택...", options=options)
-        self.members = members
+        self.members, self.conditions = members, conditions
 
     async def callback(self, interaction: discord.Interaction):
         view = discord.ui.View()
-        view.add_item(TeamDivideButton(int(self.values[0]), self.members))
+        view.add_item(TeamDivideButton(int(self.values[0]), self.members, self.conditions))
         await interaction.response.edit_message(content=f"👥 {self.values[0]}개 팀 선택됨.", view=view)
+
+class ConditionSettingView(discord.ui.View):
+    def __init__(self, members):
+        super().__init__(timeout=None)
+        self.members = members
+        self.conditions = {'duos': [], 'rivals': []}
+        options = [discord.SelectOption(label=m.display_name, value=str(m.id)) for m in members]
+        
+        self.s1 = discord.ui.Select(placeholder="유저 A 선택...", options=options[:25], custom_id="cond_1")
+        self.s2 = discord.ui.Select(placeholder="유저 B 선택...", options=options[:25], custom_id="cond_2")
+        
+        async def dummy(interaction): await interaction.response.defer()
+        self.s1.callback = self.s2.callback = dummy
+        self.add_item(self.s1)
+        self.add_item(self.s2)
+
+    def get_status_text(self):
+        txt = "👯 **[특수 조건 설정]**\n"
+        if self.conditions['duos']:
+            txt += "🤝 **듀오:** " + ", ".join([f"<@{a}>+<@{b}>" for a,b in self.conditions['duos']]) + "\n"
+        if self.conditions['rivals']:
+            txt += "⚔️ **라이벌:** " + ", ".join([f"<@{a}>vs<@{b}>" for a,b in self.conditions['rivals']]) + "\n"
+        if not self.conditions['duos'] and not self.conditions['rivals']:
+            txt += "설정된 조건 없음 (완전 밸런스 매칭)"
+        return txt
+
+    @discord.ui.button(label="🤝 듀오(같은 팀) 추가", style=discord.ButtonStyle.success, row=2)
+    async def add_duo(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.s1.values or not self.s2.values or self.s1.values[0] == self.s2.values[0]: 
+            return await interaction.response.send_message("❌ 서로 다른 두 명을 선택하세요!", ephemeral=True)
+        self.conditions['duos'].append((int(self.s1.values[0]), int(self.s2.values[0])))
+        await interaction.response.edit_message(content=self.get_status_text(), view=self)
+
+    @discord.ui.button(label="⚔️ 라이벌(다른 팀) 추가", style=discord.ButtonStyle.danger, row=2)
+    async def add_rival(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.s1.values or not self.s2.values or self.s1.values[0] == self.s2.values[0]: 
+            return await interaction.response.send_message("❌ 서로 다른 두 명을 선택하세요!", ephemeral=True)
+        self.conditions['rivals'].append((int(self.s1.values[0]), int(self.s2.values[0])))
+        await interaction.response.edit_message(content=self.get_status_text(), view=self)
+
+    @discord.ui.button(label="🗑️ 조건 초기화", style=discord.ButtonStyle.secondary, row=3)
+    async def reset_cond(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.conditions = {'duos': [], 'rivals': []}
+        await interaction.response.edit_message(content=self.get_status_text(), view=self)
+
+    @discord.ui.button(label="✅ 이 조건으로 팀 개수 설정", style=discord.ButtonStyle.primary, row=3)
+    async def done_cond(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = discord.ui.View()
+        view.add_item(TeamCountSelect(self.members, self.conditions))
+        await interaction.response.edit_message(content="⚖️ 팀 개수를 골라주세요.", view=view)
+
 
 class ExcludeSelectView(discord.ui.View):
     def __init__(self, members):
@@ -890,20 +927,95 @@ class ExcludeSelectView(discord.ui.View):
         self.select.callback = cb
         self.add_item(self.select)
 
-    @discord.ui.button(label="✅ 제외하고 시작", style=discord.ButtonStyle.primary, row=1)
+    async def go_to_conditions(self, interaction, filtered_members):
+        view = ConditionSettingView(filtered_members)
+        await interaction.response.edit_message(content=view.get_status_text(), view=view)
+
+    @discord.ui.button(label="✅ 제외 적용", style=discord.ButtonStyle.primary, row=1)
     async def confirm_exclude(self, interaction, button):
-        if not self.excluded_ids: return await interaction.response.send_message("❌ 유저를 선택하세요.", ephemeral=True)
+        if not self.excluded_ids: return await interaction.response.send_message("❌ 제외할 유저를 선택하세요.", ephemeral=True)
         filtered = [m for m in self.members if str(m.id) not in self.excluded_ids]
         if len(filtered) < 2: return await interaction.response.send_message("❌ 인원 부족!", ephemeral=True)
-        view = discord.ui.View()
-        view.add_item(TeamCountSelect(filtered))
-        await interaction.response.edit_message(content=f"📋 참여 인원: **{len(filtered)}명**", view=view)
+        await self.go_to_conditions(interaction, filtered)
 
-    @discord.ui.button(label="🚀 전원 포함 시작", style=discord.ButtonStyle.green, row=1)
+    @discord.ui.button(label="🚀 전원 포함 진행", style=discord.ButtonStyle.green, row=1)
     async def skip_exclude(self, interaction, button):
-        view = discord.ui.View()
-        view.add_item(TeamCountSelect(self.members))
-        await interaction.response.edit_message(content=f"📋 참여 인원: **{len(self.members)}명**", view=view)
+        await self.go_to_conditions(interaction, self.members)
+
+
+class MoveConfirmView(discord.ui.View):
+    def __init__(self, teams, team_channels, members, conditions):
+        super().__init__(timeout=None)
+        self.teams, self.team_channels, self.members, self.conditions = teams, team_channels, members, conditions
+
+    @discord.ui.button(label="🔄 랜덤 다시 짜기 (조건유지)", style=discord.ButtonStyle.blurple)
+    async def reroll_teams(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        scores = load_data(SCORE_FILE)
+        noisy_scores = {k: {"score": float(v.get("score",0)) + random.uniform(-1.0, 1.0)} for k, v in scores.items()}
+        
+        new_teams, error_msg = divide_teams_with_conditions(self.members, len(self.teams), noisy_scores, self.conditions)
+        if error_msg: return await interaction.followup.send(error_msg, ephemeral=True)
+            
+        self.teams = new_teams
+        embed = build_horizontal_embed(self.teams, len(self.teams), "⚖️ 내전 밸런스 (조건 유지 재배치됨)")
+        await interaction.message.edit(embed=embed, view=self)
+
+    @discord.ui.button(label="👥 수동 팀원 교체", style=discord.ButtonStyle.secondary)
+    async def manual_swap(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="🔄 맞교환할 인원을 선택하세요. (수동 교체는 조건을 무시합니다)", view=SwapView(self.teams, self.team_channels, self.members, self.conditions))
+        
+    @discord.ui.button(label="👑 [최종 확정] 주장 선택 및 밴픽", style=discord.ButtonStyle.danger, row=1)
+    async def finalize_move(self, interaction: discord.Interaction, button: discord.ui.Button):
+        cfg = load_data(CONFIG_FILE)
+        if 'announce_id' not in cfg: return await interaction.response.send_message("❌ `!공지채널설정`이 되어 있지 않습니다!", ephemeral=True)
+        await interaction.response.edit_message(content="👑 각 팀의 주장을 드롭다운 메뉴에서 직접 선출해 주세요.", embed=None, view=ManualCaptainSelectView(self.teams, self.team_channels))
+
+    @discord.ui.button(label="⏩ 밴픽 건너뛰기 (바로 공지)", style=discord.ButtonStyle.gray, row=1)
+    async def skip_banpick_entirely(self, interaction: discord.Interaction, button: discord.ui.Button):
+        for child in self.children: child.disabled = True
+        cfg = load_data(CONFIG_FILE)
+        announce_id = cfg.get('announce_id')
+        save_data(MATCH_FILE, pack_match_data(self.teams))
+
+        if announce_id:
+            ann_channel = bot.get_channel(int(announce_id))
+            if ann_channel:
+                embed = build_horizontal_embed(self.teams, len(self.teams), "🏆 [내전 매칭 성사] 최종 라인업! (밴픽 없음)")
+                await ann_channel.send(content="🔔 **내전 매칭이 확정되었습니다! (밴픽 생략)**", embed=embed)
+                
+        ws_code = generate_workshop_code(self.teams, [])
+        await interaction.response.edit_message(content="⚙️ **[방장 컨트롤 패널]** 내전 관리를 시작합니다.", view=AdminControlPanel(self.teams, self.team_channels, ws_code, captains=None))
+
+
+class SwapView(discord.ui.View):
+    def __init__(self, teams, team_channels, members, conditions):
+        super().__init__(timeout=None)
+        self.teams, self.team_channels, self.members, self.conditions = teams, team_channels, members, conditions
+        options = [discord.SelectOption(label=p.display_name, value=str(p.id)) for t in teams for p in t]
+        self.s1 = discord.ui.Select(placeholder="🔄 첫 번째 유저...", options=options, custom_id="swap_1")
+        self.s2 = discord.ui.Select(placeholder="🔄 두 번째 유저...", options=options, custom_id="swap_2")
+        async def dummy(interaction): await interaction.response.defer()
+        self.s1.callback = self.s2.callback = dummy
+        self.add_item(self.s1)
+        self.add_item(self.s2)
+
+    @discord.ui.button(label="🔄 교환 실행", style=discord.ButtonStyle.green, row=2)
+    async def execute_swap(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.s1.values or not self.s2.values or self.s1.values[0] == self.s2.values[0]: return await interaction.response.send_message("❌ 서로 다른 두 명을 선택하세요!", ephemeral=True)
+        u1_id, u2_id = self.s1.values[0], self.s2.values[0]
+        u1_pos, u2_pos = None, None
+        for t_idx, team in enumerate(self.teams):
+            for p_idx, p in enumerate(team):
+                if str(p.id) == u1_id: u1_pos = (t_idx, p_idx)
+                if str(p.id) == u2_id: u2_pos = (t_idx, p_idx)
+        p1, p2 = self.teams[u1_pos[0]][u1_pos[1]], self.teams[u2_pos[0]][u2_pos[1]]
+        self.teams[u1_pos[0]][u1_pos[1]], self.teams[u2_pos[0]][u2_pos[1]] = p2, p1
+        
+        embed = build_horizontal_embed(self.teams, len(self.teams), "⚖️ 내전 밸런스 조정 중 (수동 교체됨)")
+        await interaction.response.edit_message(content="✅ 교환 완료!", embed=embed, view=MoveConfirmView(self.teams, self.team_channels, self.members, self.conditions))
+
+# --- 👥 8. 내전 시작 및 인원 제외 UI ---
 
 @bot.command(name='내전시작')
 async def start_civil_war(ctx):
