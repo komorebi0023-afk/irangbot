@@ -773,7 +773,7 @@ class WinButton(discord.ui.Button):
 
 # 💡 [업데이트됨] 배팅 모달 및 타이머 뷰 (선수 배팅 차단 로직 추가)
 class BetModal(discord.ui.Modal, title="💰 포인트 배팅"):
-    amount_input = discord.ui.TextInput(label="배팅할 금액 (숫자 또는 '올인')", placeholder="예: 500, 올인")
+    amount_input = discord.ui.TextInput(label="배팅할 금액 (10 포인트 이상) (숫자 또는 '올인')", placeholder="예: 500, 올인")
 
     def __init__(self, team_name, view):
         super().__init__()
@@ -804,7 +804,7 @@ class BetModal(discord.ui.Modal, title="💰 포인트 배팅"):
         elif val.isdigit(): bet_amt = int(val)
         else: return await interaction.response.send_message("❌ 올바른 숫자를 입력하세요.", ephemeral=True)
 
-        if bet_amt <= 0: return await interaction.response.send_message("❌ 1 포인트 이상 배팅하세요.", ephemeral=True)
+        if bet_amt <= 9: return await interaction.response.send_message("❌ 10 포인트 이상 배팅하세요.", ephemeral=True)
         if bet_amt > bal: return await interaction.response.send_message(f"❌ 잔액이 부족합니다. (현재 잔액: {bal:,} P)", ephemeral=True)
 
         await interaction.response.defer(ephemeral=True)
