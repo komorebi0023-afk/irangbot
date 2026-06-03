@@ -886,7 +886,7 @@ class DirectSelectBanCount(discord.ui.Select):
         embed = build_horizontal_embed(self.tms, len(self.tms), f"🏆 [{self.set_count}세트] 밴픽 진행 중")
         
         await ann_ch.send(content=msg, embed=embed, view=bp_view)
-        await interaction.response.edit_message(content=f"✅ 공지 채널에 {self.set_count}세트 밴픽 화면을 띄웠습니다!", view=None)3
+        await interaction.response.edit_message(content=f"✅ 공지 채널에 {self.set_count}세트 밴픽 화면을 띄웠습니다!", view=None)
 
 class NextSetConfirmView(discord.ui.View):
     def __init__(self, teams, team_channels, captains, set_count=1, ws_code=None, ann_msg_obj=None):
