@@ -865,6 +865,42 @@ class WinButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         await self.panel.record_result(interaction, f"{self.team_idx+1}팀", self.team_idx)
 
+# 💡 [새로 추가됨] 밴픽 진행 중 작전 회의를 위한 임시 방장 패널
+class BanPickAdminPanel(discord.ui.View):
+    def __init__(self, teams, team_channels):
+        super().__init__(timeout=None)
+        self.teams = teams
+        self.team_channels = team_channels
+
+    @discord.ui.button(label="🔊 팀원 음성 채널 분배", style=discord.ButtonStyle.secondary, row=0)
+    async def move_voice(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        move_success = 0
+        for i, team in enumerate(self.teams):
+            ch_id = self.team_channels.get(str(i + 1))
+            if ch_id and bot.get_channel(int(ch_id)):
+                for p in team:
+                    if hasattr(p, 'voice') and p.voice:
+                        try: await p.move_to(bot.get_channel(int(ch_id))); move_success += 1
+                        except: pass
+        await interaction.followup.send(f"✅ 팀원 음성 분배 완료! ({move_success}명)", ephemeral=True)
+
+    @discord.ui.button(label="↩️ 대기실 복귀", style=discord.ButtonStyle.danger, row=0)
+    async def return_lobby(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("⏳ 고정 메인 대기실로 복귀시킵니다...", ephemeral=True)
+        cfg = load_data(CONFIG_FILE)
+        lobby_id = cfg.get('lobby_id')
+        main_lobby = bot.get_channel(int(lobby_id)) if lobby_id else None
+        if not main_lobby: return await interaction.edit_original_response(content="❌ 고정 메인 대기실 채널을 찾을 수 없습니다.")
+        move_success = 0
+        for team in self.teams:
+            for p in team:
+                if hasattr(p, 'voice') and p.voice:
+                    try: await p.move_to(main_lobby); move_success += 1
+                    except: pass
+        await interaction.edit_original_response(content=f"✅ {move_success}명을 대기실로 이동시켰습니다!")
+
+# 💡 [업데이트됨] 밴픽 개수 선택 후 임시 패널을 관리자 채널에 전송
 class DirectSelectBanCount(discord.ui.Select):
     def __init__(self, caps, tms, chans, admin_ch, set_count=1):
         self.caps, self.tms, self.chans, self.admin_ch, self.set_count = caps, tms, chans, admin_ch, set_count
@@ -882,12 +918,14 @@ class DirectSelectBanCount(discord.ui.Select):
         bp_view = BanPickView(self.caps, self.tms, self.chans, count, self.admin_ch, self.set_count)
         msg = f"👑 **[{self.set_count}세트 밴픽 진행]** 각 팀 주장: " + " / ".join([c.mention for c in self.caps]) + "\n🚨 주장들은 공지 채널의 역할군별 메뉴에서 밴할 영웅을 선택해 주세요!"
         
-        # 💡 [수정된 부분] 밴픽 시작 시 양 팀의 라인업 표(임베드)를 함께 출력합니다.
         embed = build_horizontal_embed(self.tms, len(self.tms), f"🏆 [{self.set_count}세트] 밴픽 진행 중")
-        
         await ann_ch.send(content=msg, embed=embed, view=bp_view)
+        
+        # 관리자 채널(방장 화면)에 밴픽용 임시 패널 전송
+        admin_msg = f"⚙️ **[밴픽 대기 중 - 임시 방장 패널]**\n주장들이 밴픽을 완료하기 전까지 이 패널을 사용해 팀원들을 음성 채널로 분배하여 작전 회의를 진행할 수 있습니다."
+        await self.admin_ch.send(content=admin_msg, view=BanPickAdminPanel(self.tms, self.chans))
+        
         await interaction.response.edit_message(content=f"✅ 공지 채널에 {self.set_count}세트 밴픽 화면을 띄웠습니다!", view=None)
-
 class NextSetConfirmView(discord.ui.View):
     def __init__(self, teams, team_channels, captains, set_count=1, ws_code=None, ann_msg_obj=None):
         super().__init__(timeout=None)
