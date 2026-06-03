@@ -349,282 +349,9 @@ async def select_map(ctx):
 
 
 # --- 🛠️ 5. 유틸리티 함수 (가로형 표 및 워크샵 생성) ---
-def build_horizontal_embed(teams, team_count, title="🎲 내전 팀 구성 결과"):
-    scores = load_data(SCORE_FILE)
-    team_colors = ["🔴 1팀", "🔵 2팀", "🟢 3팀", "🟡 4팀"]
-    embed = discord.Embed(title=title, color=discord.Color.gold())
-    
-    for i in range(team_count):
-        if i >= len(teams): break
-        team = teams[i]
-        
-        t_score = sum(scores.get(str(p.id), {}).get("score", 0) for p in team)
-        avg = round(t_score / len(team), 1) if team else 0
-        
-        # 각 팀원들을 세로(엔터)로 깔끔하게 정렬
-        members_text = "\n".join([p.mention for p in team]) if team else "없음"
-        
-        # inline=True를 사용해 각각의 독립된 칸(열)으로 깔끔하게 분리
-        embed.add_field(name=f"{team_colors[i]} (평균 {avg})", value=members_text, inline=True)
-        
-    return embed
-
-# [교체] 워크샵 관전자 이동 로직을 제거하고 안전하게 수정한 최종본입니다.
-def generate_workshop_code(teams, banned_heroes):
-    scores = load_data(SCORE_FILE)
-    ws_text = "```javascript\n// 워크샵 스크립트 (복사해서 붙여넣기)\n"
-    ws_text += "variables {\n  global:\n    0: Team1_Names\n    1: Team2_Names\n    2: Team3_Names\n    3: Team4_Names\n    4: Banned_Heroes\n}\n\n"
-    
-    def get_ingame_names(team_members):
-        names = []
-        for p in team_members:
-            btag = scores.get(str(p.id), {}).get("battletag", "알수없음")
-            ingame = btag.split('#')[0] if '#' in btag else btag
-            names.append(f'Custom String("{ingame}")')
-        return ", ".join(names)
-
-    ws_text += 'rule("내전 시스템: 기초 설정") {\n  event { Ongoing - Global; }\n  action {\n'
-    if len(teams) > 0: ws_text += f'    Global.Team1_Names = Array({get_ingame_names(teams[0])});\n'
-    if len(teams) > 1: ws_text += f'    Global.Team2_Names = Array({get_ingame_names(teams[1])});\n'
-    if len(teams) > 2: ws_text += f'    Global.Team3_Names = Array({get_ingame_names(teams[2])});\n'
-    if len(teams) > 3: ws_text += f'    Global.Team4_Names = Array({get_ingame_names(teams[3])});\n'
-    
-    ban_strings = ", ".join([f'Hero({h})' for h in banned_heroes]) if banned_heroes else "Empty Array"
-    
-    # 💡 f-string 내부 중괄호 버그 수정된 부분 (}} 두 번 겹치기)
-    ws_text += f'    Global.Banned_Heroes = Array({ban_strings});\n  }}\n}}\n\n'
-    
-    # 💡 관전자(Spectator) 강제 이동 부분을 완전히 삭제했습니다.
-    ws_text += 'rule("내전 시스템: 자동 팀 분배") {\n  event { Ongoing - Each Player; All; All; }\n  action {\n'
-    ws_text += '    If(Array Contains(Global.Team1_Names, Custom String("{0}", Event Player)));\n      Move Player to Team(Event Player, Team 1, -1);\n'
-    ws_text += '    Else If(Array Contains(Global.Team2_Names, Custom String("{0}", Event Player)));\n      Move Player to Team(Event Player, Team 2, -1);\n'
-    ws_text += '    End;\n  }\n}\n\n'
-    
-    ws_text += 'rule("내전 시스템: 영웅 밴픽 제한") {\n  event { Ongoing - Each Player; All; All; }\n  condition { Has Spawned(Event Player) == True; }\n  action {\n'
-    ws_text += '    Set Player Allowed Heroes(Event Player, Remove From Array(Allowed Heroes(Event Player), Global.Banned_Heroes));\n  }\n}\n```'
-    
-    return ws_text
-
 # [새로 추가] 연전 진행 시 사용되는 독립된 밴픽 개수 선택 드롭다운 클래스
-class DirectSelectBanCount(discord.ui.Select):
-    def __init__(self, caps, tms, chans, admin_ch):
-        self.caps, self.tms, self.chans, self.admin_ch = caps, tms, chans, admin_ch
-        super().__init__(placeholder="다음 세트: 팀당 몇 명을 밴할까요?", options=[
-            discord.SelectOption(label="팀당 1개 밴", value="1"),
-            discord.SelectOption(label="팀당 2개 밴", value="2"),
-            discord.SelectOption(label="팀당 3개 밴", value="3")
-        ])
-        
-    async def callback(self, interaction: discord.Interaction):
-        count = int(self.values[0])
-        cfg = load_data(CONFIG_FILE)
-        ann_ch = bot.get_channel(int(cfg.get('announce_id'))) if cfg.get('announce_id') else interaction.channel
-        
-        # 3분할 복구된 BanPickView 호출
-        bp_view = BanPickView(self.caps, self.tms, self.chans, count, self.admin_ch)
-        msg = "👑 **[다음 세트 밴픽 진행]** 각 팀 주장: " + " / ".join([c.mention for c in self.caps]) + "\n🚨 주장들은 공지 채널의 역할군별 메뉴에서 밴할 영웅을 선택해 주세요!"
-        await ann_ch.send(content=msg, view=bp_view)
-        await interaction.response.edit_message(content="✅ 공지 채널에 다음 세트 밴픽 화면을 성공적으로 띄웠습니다!", view=None)
 
 # [새로 추가] 통합 관리 컨트롤 패널 및 다전제 확인 뷰
-class NextSetConfirmView(discord.ui.View):
-    def __init__(self, teams, team_channels, captains):
-        super().__init__(timeout=None)
-        self.teams, self.team_channels, self.captains = teams, team_channels, captains
-
-    @discord.ui.button(label="🔄 현재 멤버 그대로 다음 세트 밴픽", style=discord.ButtonStyle.success, row=0)
-    async def next_set_ban(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not is_admin(interaction):
-            return await interaction.response.send_message("❌ 관리자 권한이 없습니다.", ephemeral=True)
-            
-        if self.captains is None or len(self.captains) == 0:
-            await interaction.response.edit_message(
-                content="👑 이전 판에 밴픽을 스킵하여 주장 데이터가 없습니다. 각 팀의 주장을 드롭다운에서 먼저 선출해 주세요.", 
-                embed=None, 
-                view=ManualCaptainSelectView(self.teams, self.team_channels)
-            )
-        else:
-            view = discord.ui.View()
-            view.add_item(DirectSelectBanCount(self.captains, self.teams, self.team_channels, interaction.channel))
-            await interaction.response.edit_message(content="⚖️ 다음 세트의 밴픽 개수를 정해주세요.", view=view)
-
-    @discord.ui.button(label="⏩ 밴픽 건너뛰기 (바로 진행)", style=discord.ButtonStyle.secondary, row=0)
-    async def next_set_skip(self, interaction: discord.Interaction, button: discord.ui.Button):
-        cfg = load_data(CONFIG_FILE)
-        ann_ch = bot.get_channel(int(cfg.get('announce_id'))) if cfg.get('announce_id') else interaction.channel
-        embed = build_horizontal_embed(self.teams, len(self.teams), "🏆 [연전 진행] 다음 세트 라인업! (밴픽 없음)")
-        await ann_ch.send(content="🔔 **다음 세트가 시작되었습니다!**", embed=embed)
-        ws_code = generate_workshop_code(self.teams, [])
-        await interaction.response.edit_message(content="⚙️ **[방장 컨트롤 패널]** 다음 세트 관리를 시작합니다.", view=AdminControlPanel(self.teams, self.team_channels, ws_code, self.captains))
-
-    @discord.ui.button(label="🛑 연전 종료 (새로 팀 짜기)", style=discord.ButtonStyle.danger, row=1)
-    async def end_match(self, interaction: discord.Interaction, button: discord.ui.Button):
-        for child in self.children: child.disabled = True
-        await interaction.response.edit_message(content="✅ 수고하셨습니다! 다음 내전을 진행하려면 `!내전시작`을 입력해 주세요.", view=self)
-
-    @discord.ui.button(label="↩️ 대기실 복귀", style=discord.ButtonStyle.primary, row=1)
-    async def return_lobby(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("⏳ 경기 중인 팀원들을 고정 메인 대기실로 복귀시킵니다...", ephemeral=True)
-        
-        # 💡 경기 결과 창에서도 동일하게 등록된 고정 대기실 ID를 바라보도록 조정
-        cfg = load_data(CONFIG_FILE)
-        lobby_id = cfg.get('lobby_id')
-        main_lobby = bot.get_channel(int(lobby_id)) if lobby_id else None
-            
-        if not main_lobby:
-            return await interaction.edit_original_response(content="❌ 고정 메인 대기실 채널을 찾을 수 없습니다. `!대기실설정` 명령어를 다시 확인해 주세요.")
-            
-        move_success = 0
-        for team in self.teams:
-            for p in team:
-                if hasattr(p, 'voice') and p.voice:
-                    try: await p.move_to(main_lobby); move_success += 1
-                    except: pass
-        await interaction.edit_original_response(content=f"✅ {move_success}명의 팀원을 설정된 고정 대기실({main_lobby.name})로 이동시켰습니다!")
-
-class AdminControlPanel(discord.ui.View):
-    def __init__(self, teams, team_channels, ws_code, captains):
-        super().__init__(timeout=None)
-        self.teams, self.team_channels, self.ws_code, self.captains = teams, team_channels, ws_code, captains
-
-    async def record_result(self, interaction: discord.Interaction, winner: str):
-        await interaction.response.send_message(f"⏳ 구글 시트에 {winner} 승리 기록을 저장하는 중...", ephemeral=True)
-        
-        match_data = pack_match_data(self.teams)
-        client, sheet_key = get_google_client()
-        if client and sheet_key:
-            try:
-                record_sheet = client.open_by_key(sheet_key).worksheet("전적")
-                
-                # 💡 파이썬 3.12 최신 기준에 맞춰 utcnow() 경고가 발생하지 않는 표준 문법으로 교체
-                import datetime as dt
-                kst_time = (dt.datetime.now(dt.UTC) + dt.timedelta(hours=9)).strftime("%Y-%m-%d %H:%M")
-                
-                row_data = [
-                    kst_time, f"{winner} 승리", 
-                    ", ".join(match_data.get('t1_nicks', [])), ", ".join(match_data.get('t1_ids', [])), ", ".join(match_data.get('t1_btags', [])),
-                    ", ".join(match_data.get('t2_nicks', [])), ", ".join(match_data.get('t2_ids', [])), ", ".join(match_data.get('t2_btags', []))
-                ]
-                record_sheet.append_row(row_data) 
-                
-                for child in self.children: child.disabled = True
-                await interaction.message.edit(content=f"✅ **[{winner} 승리 기록 완료]** 동일한 멤버로 다음 세트를 진행하시겠습니까?", view=NextSetConfirmView(self.teams, self.team_channels, self.captains))
-                await interaction.edit_original_response(content=f"✅ 구글 시트에 {winner} 승리 기록이 정상적으로 저장되었습니다!")
-            except Exception as e:
-                await interaction.edit_original_response(content=f"❌ 기록 실패: {e}")
-
-    @discord.ui.button(label="🟢 1팀 승리", style=discord.ButtonStyle.success, row=0)
-    async def win_t1(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.record_result(interaction, "1팀")
-
-    @discord.ui.button(label="🔵 2팀 승리", style=discord.ButtonStyle.primary, row=0)
-    async def win_t2(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.record_result(interaction, "2팀")
-
-    @discord.ui.button(label="🔊 팀원 음성 채널 분배", style=discord.ButtonStyle.secondary, row=1)
-    async def move_voice(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # 💡 버튼이 잠기지 않고 언제든 여러 번 다시 누를 수 있도록 상시 오픈 구조로 변경
-        await interaction.response.defer(ephemeral=True)
-        move_success = 0
-        for i, team in enumerate(self.teams):
-            ch_id = self.team_channels.get(str(i + 1))
-            if ch_id and bot.get_channel(int(ch_id)):
-                for p in team:
-                    if hasattr(p, 'voice') and p.voice:
-                        try: await p.move_to(bot.get_channel(int(ch_id))); move_success += 1
-                        except: pass
-        await interaction.followup.send(f"✅ 팀원 음성 채널 분배 완료! (이동 성공: {move_success}명)", ephemeral=True)
-
-    @discord.ui.button(label="🛠️ 코드 DM 받기", style=discord.ButtonStyle.secondary, row=1)
-    async def send_dm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            await interaction.user.send(f"🛠️ **방장용 워크샵 자동 연동 코드**\n{self.ws_code}")
-            await interaction.response.send_message("✅ DM으로 워크샵 코드를 전송했습니다!", ephemeral=True)
-        except:
-            await interaction.response.send_message("❌ DM 차단 설정이 되어 전송할 수 없습니다.", ephemeral=True)
-
-    @discord.ui.button(label="↩️ 대기실 복귀", style=discord.ButtonStyle.danger, row=2)
-    async def return_lobby(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("⏳ 경기 중인 팀원들을 고정 메인 대기실로 복귀시킵니다...", ephemeral=True)
-        
-        # 💡 방장의 위치와 상관없이 config.json에 등록된 lobby_id를 정밀 타겟팅합니다.
-        cfg = load_data(CONFIG_FILE)
-        lobby_id = cfg.get('lobby_id')
-        main_lobby = bot.get_channel(int(lobby_id)) if lobby_id else None
-            
-        if not main_lobby:
-            return await interaction.edit_original_response(content="❌ 고정 메인 대기실 채널을 찾을 수 없습니다. `!대기실설정` 명령어를 다시 확인해 주세요.")
-            
-        move_success = 0
-        for team in self.teams:
-            for p in team:
-                if hasattr(p, 'voice') and p.voice:
-                    try: await p.move_to(main_lobby); move_success += 1
-                    except: pass
-        await interaction.edit_original_response(content=f"✅ {move_success}명의 팀원을 설정된 고정 대기실({main_lobby.name})로 이동시켰습니다!")
-
-# --- 🚫 6. 밴픽 시스템 ---
-# [교체] 역할군별 3분할 밴픽이 완전 복구된 BanPickView 및 서브 클래스 덩어리입니다.
-class BanRoleSelect(discord.ui.Select):
-    def __init__(self, role, heroes, parent_view):
-        self.parent_view = parent_view
-        # 이미 밴된 영웅은 선택지에서 제외
-        options = [discord.SelectOption(label=h, value=h) for h in heroes if h not in parent_view.banned_heroes]
-        super().__init__(
-            placeholder=f"🚫 [{role}] 밴 선택 ({len(parent_view.banned_heroes)}/{parent_view.max_bans}개)",
-            options=options[:25],
-            custom_id=f"ban_select_{role}"
-        )
-    
-    async def callback(self, interaction: discord.Interaction):
-        view = self.parent_view
-        # [보안 검증] 방장 및 지정된 주장 2명만 제어 가능
-        if not (is_admin(interaction) or interaction.user.id in [c.id for c in view.captains]):
-            return await interaction.response.send_message("❌ 밴픽 조작 권한이 없습니다. (각 팀 주장 및 관리자 전용)", ephemeral=True)
-        
-        chosen = self.values[0]
-        view.banned_heroes.append(chosen)
-        
-        # 설정된 밴 개수 상한선에 도달했는지 체크
-        if len(view.banned_heroes) >= view.max_bans:
-            await view.execute_final(interaction)
-        else:
-            # 아직 더 밴해야 한다면 3개 드롭다운을 최신화하여 화면 갱신
-            view.update_selects()
-            embed = build_horizontal_embed(view.teams, len(view.teams), "🏆 [밴픽 진행 중]")
-            embed.add_field(name="🚫 현재 금지된 영웅 목록", value=", ".join(view.banned_heroes), inline=False)
-            await interaction.response.edit_message(embed=embed, view=view)
-
-class BanPickView(discord.ui.View):
-    def __init__(self, captains, teams, team_channels, ban_count, admin_channel):
-        super().__init__(timeout=None)
-        self.captains = captains
-        self.teams = teams
-        self.team_channels = team_channels
-        self.max_bans = ban_count * len(teams) # 팀당 n개씩 총합 상한선
-        self.banned_heroes = []
-        self.admin_channel = admin_channel
-        self.update_selects()
-
-    def update_selects(self):
-        self.clear_items()
-        # 글로벌 OW_HEROES 데이터 구조를 순회하며 역할군별 드롭다운 배치
-        for role, heroes in OW_HEROES.items():
-            available = [h for h in heroes if h not in self.banned_heroes]
-            if available:
-                self.add_item(BanRoleSelect(role, available, self))
-
-    async def execute_final(self, interaction):
-        save_data(MATCH_FILE, pack_match_data(self.teams))
-        
-        # 밴픽이 끝나면 공지 채널의 드롭다운을 파괴(view=None)하고 텍스트 박스로 고정
-        embed = build_horizontal_embed(self.teams, len(self.teams), "🏆 [내전 매칭 성사] 최종 라인업!")
-        embed.add_field(name="🚫 금지 영웅 (밴픽 완료)", value=", ".join(self.banned_heroes) if self.banned_heroes else "없음", inline=False)
-        await interaction.response.edit_message(content="✅ **(진행 완료) 양 팀의 밴픽이 최종 확정되었습니다!**", embed=embed, view=None)
-        
-        # 관리자 조작 창으로 마스터 제어 패널 전송
-        ws_code = generate_workshop_code(self.teams, self.banned_heroes)
-        await self.admin_channel.send(content="⚙️ **[방장 컨트롤 패널]** 내전 관리를 시작합니다.", view=AdminControlPanel(self.teams, self.team_channels, ws_code, self.captains))
 
 class BanCountSelectView(discord.ui.View):
     def __init__(self, teams, team_channels):
@@ -682,80 +409,6 @@ class FinalVoiceMoveView(discord.ui.View):
                         except: pass
         await interaction.message.edit(content=f"✅ 모든 팀원 배치 완료! (이동 성공: {move_success}명)")
 
-# 유저 매칭 세부 데이터 패킹 함수
-def pack_match_data(teams):
-    scores = load_data(SCORE_FILE)
-    def get_fields(team):
-        return (
-            [p.display_name for p in team],
-            [str(p.id) for p in team],
-            [scores.get(str(p.id), {}).get('battletag', '-') for p in team]
-        )
-    t1_n, t1_i, t1_b = get_fields(teams[0]) if len(teams) > 0 else ([], [], [])
-    t2_n, t2_i, t2_b = get_fields(teams[1]) if len(teams) > 1 else ([], [], [])
-    return {"t1_nicks": t1_n, "t1_ids": t1_i, "t1_btags": t1_b, "t2_nicks": t2_n, "t2_ids": t2_i, "t2_btags": t2_b}
-
-# [새로 추가] 기존에 없던 주장 수동 선택용 드롭다운 UI 클래스입니다.
-class ManualCaptainSelectView(discord.ui.View):
-    def __init__(self, teams, team_channels):
-        super().__init__(timeout=None)
-        self.teams, self.team_channels = teams, team_channels
-        self.c1 = None
-        self.c2 = None
-
-        # 1팀 드롭다운
-        options_t1 = [discord.SelectOption(label=p.display_name, value=str(p.id)) for p in teams[0]]
-        self.s1 = discord.ui.Select(placeholder="👑 1팀 주장 선택...", options=options_t1, custom_id="cap_select_1")
-        
-        # 2팀 드롭다운
-        options_t2 = [discord.SelectOption(label=p.display_name, value=str(p.id)) for p in teams[1]] if len(teams) > 1 else []
-        self.s2 = discord.ui.Select(placeholder="👑 2팀 주장 선택...", options=options_t2, custom_id="cap_select_2") if options_t2 else None
-
-        async def cb1(interaction: discord.Interaction):
-            self.c1 = interaction.guild.get_member(int(self.s1.values[0]))
-            await interaction.response.defer()
-        self.s1.callback = cb1
-        self.add_item(self.s1)
-
-        if self.s2:
-            async def cb2(interaction: discord.Interaction):
-                self.c2 = interaction.guild.get_member(int(self.s2.values[0]))
-                await interaction.response.defer()
-            self.s2.callback = cb2
-            self.add_item(self.s2)
-
-    @discord.ui.button(label="🚫 주장 확정 및 밴픽 시작", style=discord.ButtonStyle.danger, row=2)
-    async def go_banpick(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not self.c1 or (self.s2 and not self.c2):
-            return await interaction.response.send_message("❌ 모든 팀의 주장을 먼저 선택해 주세요!", ephemeral=True)
-            
-        captains = [self.c1]
-        if self.c2: captains.append(self.c2)
-        
-        # 주장이 확정되면 기존의 밴픽 카운트 선택 화면으로 인자값을 넘겨 이행합니다.
-        class DirectSelectBanCount(discord.ui.Select):
-            def __init__(self, caps, tms, chans):
-                self.caps, self.tms, self.chans = caps, tms, chans
-                super().__init__(placeholder="팀당 몇 명의 영웅을 밴할까요?", options=[
-                    discord.SelectOption(label="팀당 1개 (비공개 동시 선택)", value="1"),
-                    discord.SelectOption(label="팀당 2개 (교차 밴)", value="2"),
-                    discord.SelectOption(label="팀당 3개 (교차 밴)", value="3")
-                ])
-            async def callback(self, inter):
-                count = int(self.values[0])
-                cfg = load_data(CONFIG_FILE)
-                ann_ch = bot.get_channel(int(cfg.get('announce_id'))) if cfg.get('announce_id') else inter.channel
-                
-                # admin_ch로 inter.channel을 넘겨줌
-                bp_view = BanPickView(self.caps, self.tms, self.chans, count, inter.channel)
-                msg = "👑 **[지정된 각 팀 주장]** " + " / ".join([c.mention for c in self.caps]) + "\n🚨 주장들은 아래 메뉴에서 밴할 영웅을 선택해 주세요!"
-                
-                await ann_ch.send(content=msg, view=bp_view)
-                await inter.response.edit_message(content="✅ 공지 채널에 밴픽 화면을 성공적으로 띄웠습니다!", view=None)
-
-        view = discord.ui.View()
-        view.add_item(DirectSelectBanCount(captains, self.teams, self.team_channels))
-        await interaction.response.edit_message(content="⚖️ 영웅 밴픽 개수를 정해주세요.", view=view)
 
 # --- 👑 특수 조건 밸런싱 알고리즘 ---
 def divide_teams_with_conditions(members, t_count, scores, conditions):
@@ -943,33 +596,332 @@ class ExcludeSelectView(discord.ui.View):
         await self.go_to_conditions(interaction, self.members)
 
 
-class MoveConfirmView(discord.ui.View):
-    def __init__(self, teams, team_channels, members, conditions):
+# --- 🛠️ 5. 유틸리티 함수 (가로형 표 및 워크샵 생성) ---
+def build_horizontal_embed(teams, team_count, title="🎲 내전 팀 구성 결과"):
+    scores = load_data(SCORE_FILE)
+    team_colors = ["🔴 1팀", "🔵 2팀", "🟢 3팀", "🟡 4팀"]
+    embed = discord.Embed(title=title, color=discord.Color.gold())
+    
+    for i in range(team_count):
+        if i >= len(teams): break
+        team = teams[i]
+        
+        t_score = sum(float(scores.get(str(p.id), {}).get("score", 0)) for p in team)
+        avg = round(t_score / len(team), 1) if team else 0
+        
+        # 💡 [A안 적용] 멤버 멘션 옆에 내전 점수를 예쁘게 괄호로 표기합니다.
+        members_text_list = []
+        for p in team:
+            score_val = float(scores.get(str(p.id), {}).get("score", 0))
+            score_str = f"{score_val:g}" # 불필요한 소수점(.0) 자동 제거
+            members_text_list.append(f"{p.mention} ({score_str}점)")
+            
+        members_text = "\n".join(members_text_list) if members_text_list else "없음"
+        embed.add_field(name=f"{team_colors[i]} (평균 {avg})", value=members_text, inline=True)
+        
+    return embed
+
+def generate_workshop_code(teams, banned_heroes):
+    scores = load_data(SCORE_FILE)
+    ws_text = "```javascript\n// 워크샵 스크립트 (복사해서 붙여넣기)\n"
+    ws_text += "variables {\n  global:\n    0: Team1_Names\n    1: Team2_Names\n    2: Team3_Names\n    3: Team4_Names\n    4: Banned_Heroes\n}\n\n"
+    
+    def get_ingame_names(team_members):
+        names = []
+        for p in team_members:
+            btag = scores.get(str(p.id), {}).get("battletag", "알수없음")
+            ingame = btag.split('#')[0].strip() if '#' in btag else btag.strip()
+            names.append(f'Custom String("{ingame}")')
+        return ", ".join(names)
+
+    ws_text += 'rule("내전 시스템: 기초 설정") {\n  event { Ongoing - Global; }\n  action {\n'
+    if len(teams) > 0: ws_text += f'    Global.Team1_Names = Array({get_ingame_names(teams[0])});\n'
+    if len(teams) > 1: ws_text += f'    Global.Team2_Names = Array({get_ingame_names(teams[1])});\n'
+    if len(teams) > 2: ws_text += f'    Global.Team3_Names = Array({get_ingame_names(teams[2])});\n'
+    if len(teams) > 3: ws_text += f'    Global.Team4_Names = Array({get_ingame_names(teams[3])});\n'
+    
+    ban_strings = ", ".join([f'Hero({h})' for h in banned_heroes]) if banned_heroes else "Empty Array"
+    ws_text += f'    Global.Banned_Heroes = Array({ban_strings});\n  }}\n}}\n\n'
+    
+    ws_text += 'rule("내전 시스템: 자동 팀 분배") {\n  event { Ongoing - Each Player; All; All; }\n  action {\n'
+    ws_text += '    If(Array Contains(Global.Team1_Names, Custom String("{0}", Event Player)));\n      Move Player to Team(Event Player, Team 1, -1);\n'
+    ws_text += '    Else If(Array Contains(Global.Team2_Names, Custom String("{0}", Event Player)));\n      Move Player to Team(Event Player, Team 2, -1);\n'
+    ws_text += '    End;\n  }\n}\n\n'
+    
+    ws_text += 'rule("내전 시스템: 영웅 밴픽 제한") {\n  event { Ongoing - Each Player; All; All; }\n  condition { Has Spawned(Event Player) == True; }\n  action {\n'
+    ws_text += '    Set Player Allowed Heroes(Event Player, Remove From Array(Allowed Heroes(Event Player), Global.Banned_Heroes));\n  }\n}\n```'
+    return ws_text
+
+def pack_match_data(teams):
+    scores = load_data(SCORE_FILE)
+    def get_fields(team):
+        return (
+            [p.display_name for p in team],
+            [str(p.id) for p in team],
+            [scores.get(str(p.id), {}).get('battletag', '-') for p in team]
+        )
+    t1_n, t1_i, t1_b = get_fields(teams[0]) if len(teams) > 0 else ([], [], [])
+    t2_n, t2_i, t2_b = get_fields(teams[1]) if len(teams) > 1 else ([], [], [])
+    return {"t1_nicks": t1_n, "t1_ids": t1_i, "t1_btags": t1_b, "t2_nicks": t2_n, "t2_ids": t2_i, "t2_btags": t2_b}
+
+
+# --- 🔗 통합 UI 및 밴픽, 컨트롤 패널 클래스 ---
+class DirectSelectBanCount(discord.ui.Select):
+    def __init__(self, caps, tms, chans, admin_ch, set_count=1):
+        self.caps, self.tms, self.chans, self.admin_ch, self.set_count = caps, tms, chans, admin_ch, set_count
+        super().__init__(placeholder=f"[{set_count}세트] 팀당 몇 명을 밴할까요?", options=[
+            discord.SelectOption(label="팀당 1개 밴", value="1"),
+            discord.SelectOption(label="팀당 2개 밴", value="2"),
+            discord.SelectOption(label="팀당 3개 밴", value="3")
+        ])
+        
+    async def callback(self, interaction: discord.Interaction):
+        count = int(self.values[0])
+        cfg = load_data(CONFIG_FILE)
+        ann_ch = bot.get_channel(int(cfg.get('announce_id'))) if cfg.get('announce_id') else interaction.channel
+        
+        bp_view = BanPickView(self.caps, self.tms, self.chans, count, self.admin_ch, self.set_count)
+        msg = f"👑 **[{self.set_count}세트 밴픽 진행]** 각 팀 주장: " + " / ".join([c.mention for c in self.caps]) + "\n🚨 주장들은 공지 채널의 역할군별 메뉴에서 밴할 영웅을 선택해 주세요!"
+        await ann_ch.send(content=msg, view=bp_view)
+        await interaction.response.edit_message(content=f"✅ 공지 채널에 {self.set_count}세트 밴픽 화면을 띄웠습니다!", view=None)
+
+class NextSetConfirmView(discord.ui.View):
+    def __init__(self, teams, team_channels, captains, set_count=1):
         super().__init__(timeout=None)
-        self.teams, self.team_channels, self.members, self.conditions = teams, team_channels, members, conditions
+        self.teams, self.team_channels, self.captains, self.set_count = teams, team_channels, captains, set_count
+
+    @discord.ui.button(label="🔄 현재 멤버 그대로 다음 세트 진행", style=discord.ButtonStyle.success, row=0)
+    async def next_set_ban(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_admin(interaction): return await interaction.response.send_message("❌ 관리자 권한이 없습니다.", ephemeral=True)
+        next_set = self.set_count + 1
+        
+        if self.captains is None or len(self.captains) == 0:
+            await interaction.response.edit_message(
+                content=f"👑 [{next_set}세트] 이전 판에 밴픽을 스킵하여 주장 데이터가 없습니다. 주장을 선출해 주세요.", 
+                embed=None, view=ManualCaptainSelectView(self.teams, self.team_channels, next_set)
+            )
+        else:
+            view = discord.ui.View()
+            view.add_item(DirectSelectBanCount(self.captains, self.teams, self.team_channels, interaction.channel, next_set))
+            await interaction.response.edit_message(content=f"⚖️ [{next_set}세트] 다음 세트의 밴픽 개수를 정해주세요.", view=view)
+
+    @discord.ui.button(label="⏩ 다음 세트 밴픽 건너뛰기", style=discord.ButtonStyle.secondary, row=0)
+    async def next_set_skip(self, interaction: discord.Interaction, button: discord.ui.Button):
+        next_set = self.set_count + 1
+        cfg = load_data(CONFIG_FILE)
+        ann_ch = bot.get_channel(int(cfg.get('announce_id'))) if cfg.get('announce_id') else interaction.channel
+        
+        # 💡 [e스포츠 연출 적용] 
+        import datetime as dt
+        kst_time = (dt.datetime.now(dt.UTC) + dt.timedelta(hours=9)).strftime("%Y-%m-%d %H:%M")
+        ann_title = f"⚔️ [{next_set}세트] 공식 라인업 확정 ({kst_time})"
+        ann_msg = f"📢 **제 {next_set}세트 매치가 곧 시작됩니다. 선수들은 경기 준비를 부탁드립니다.**\n━━━━━━━━━━━━━━━━━━━━━━━━━"
+        embed = build_horizontal_embed(self.teams, len(self.teams), ann_title)
+        
+        await ann_ch.send(content=ann_msg, embed=embed)
+        ws_code = generate_workshop_code(self.teams, [])
+        await interaction.response.edit_message(content=f"⚙️ **[방장 컨트롤 패널 - {next_set}세트]** 다음 세트 관리를 시작합니다.", view=AdminControlPanel(self.teams, self.team_channels, ws_code, self.captains, next_set))
+
+    @discord.ui.button(label="🛑 연전 종료 (새로 팀 짜기)", style=discord.ButtonStyle.danger, row=1)
+    async def end_match(self, interaction: discord.Interaction, button: discord.ui.Button):
+        for child in self.children: child.disabled = True
+        await interaction.response.edit_message(content="✅ 수고하셨습니다! 다음 내전을 진행하려면 `!내전시작`을 입력해 주세요.", view=self)
+
+    @discord.ui.button(label="↩️ 대기실 복귀", style=discord.ButtonStyle.primary, row=1)
+    async def return_lobby(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("⏳ 경기 중인 팀원들을 고정 메인 대기실로 복귀시킵니다...", ephemeral=True)
+        cfg = load_data(CONFIG_FILE)
+        lobby_id = cfg.get('lobby_id')
+        main_lobby = bot.get_channel(int(lobby_id)) if lobby_id else None
+        if not main_lobby: return await interaction.edit_original_response(content="❌ 고정 메인 대기실 채널을 찾을 수 없습니다.")
+        move_success = 0
+        for team in self.teams:
+            for p in team:
+                if hasattr(p, 'voice') and p.voice:
+                    try: await p.move_to(main_lobby); move_success += 1
+                    except: pass
+        await interaction.edit_original_response(content=f"✅ {move_success}명의 팀원을 대기실({main_lobby.name})로 복귀시켰습니다!")
+
+class AdminControlPanel(discord.ui.View):
+    def __init__(self, teams, team_channels, ws_code, captains, set_count=1):
+        super().__init__(timeout=None)
+        self.teams, self.team_channels, self.ws_code, self.captains, self.set_count = teams, team_channels, ws_code, captains, set_count
+
+    async def record_result(self, interaction: discord.Interaction, winner: str):
+        await interaction.response.send_message(f"⏳ 구글 시트에 {winner} 승리 기록을 저장하는 중...", ephemeral=True)
+        match_data = pack_match_data(self.teams)
+        client, sheet_key = get_google_client()
+        if client and sheet_key:
+            try:
+                record_sheet = client.open_by_key(sheet_key).worksheet("전적")
+                import datetime as dt
+                kst_time = (dt.datetime.now(dt.UTC) + dt.timedelta(hours=9)).strftime("%Y-%m-%d %H:%M")
+                
+                # 시트 기록에는 세트 정보 없이 기존 그대로 깔끔하게 저장
+                row_data = [
+                    kst_time, f"{winner} 승리", 
+                    ", ".join(match_data.get('t1_nicks', [])), ", ".join(match_data.get('t1_ids', [])), ", ".join(match_data.get('t1_btags', [])),
+                    ", ".join(match_data.get('t2_nicks', [])), ", ".join(match_data.get('t2_ids', [])), ", ".join(match_data.get('t2_btags', []))
+                ]
+                record_sheet.append_row(row_data) 
+                
+                for child in self.children: child.disabled = True
+                await interaction.message.edit(content=f"✅ **[{self.set_count}세트 {winner} 승리 기록 완료]** 동일한 멤버로 다음 세트를 진행하시겠습니까?", view=NextSetConfirmView(self.teams, self.team_channels, self.captains, self.set_count))
+                await interaction.edit_original_response(content=f"✅ 구글 시트에 {winner} 기록이 정상적으로 저장되었습니다!")
+            except Exception as e:
+                await interaction.edit_original_response(content=f"❌ 기록 실패: {e}")
+
+    @discord.ui.button(label="🟢 1팀 승리", style=discord.ButtonStyle.success, row=0)
+    async def win_t1(self, interaction: discord.Interaction, button: discord.ui.Button): await self.record_result(interaction, "1팀")
+
+    @discord.ui.button(label="🔵 2팀 승리", style=discord.ButtonStyle.primary, row=0)
+    async def win_t2(self, interaction: discord.Interaction, button: discord.ui.Button): await self.record_result(interaction, "2팀")
+
+    @discord.ui.button(label="🔊 팀원 음성 채널 분배", style=discord.ButtonStyle.secondary, row=1)
+    async def move_voice(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        move_success = 0
+        for i, team in enumerate(self.teams):
+            ch_id = self.team_channels.get(str(i + 1))
+            if ch_id and bot.get_channel(int(ch_id)):
+                for p in team:
+                    if hasattr(p, 'voice') and p.voice:
+                        try: await p.move_to(bot.get_channel(int(ch_id))); move_success += 1
+                        except: pass
+        await interaction.followup.send(f"✅ 팀원 음성 분배 완료! ({move_success}명)", ephemeral=True)
+
+    @discord.ui.button(label="🛠️ 코드 DM 받기", style=discord.ButtonStyle.secondary, row=1)
+    async def send_dm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            await interaction.user.send(f"🛠️ **방장용 워크샵 자동 연동 코드 ({self.set_count}세트)**\n{self.ws_code}")
+            await interaction.response.send_message("✅ DM으로 코드를 전송했습니다!", ephemeral=True)
+        except:
+            await interaction.response.send_message("❌ DM 전송 실패.", ephemeral=True)
+
+    @discord.ui.button(label="↩️ 대기실 복귀", style=discord.ButtonStyle.danger, row=2)
+    async def return_lobby(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("⏳ 고정 메인 대기실로 복귀시킵니다...", ephemeral=True)
+        cfg = load_data(CONFIG_FILE)
+        lobby_id = cfg.get('lobby_id')
+        main_lobby = bot.get_channel(int(lobby_id)) if lobby_id else None
+        if not main_lobby: return await interaction.edit_original_response(content="❌ 채널을 찾을 수 없습니다.")
+        move_success = 0
+        for team in self.teams:
+            for p in team:
+                if hasattr(p, 'voice') and p.voice:
+                    try: await p.move_to(main_lobby); move_success += 1
+                    except: pass
+        await interaction.edit_original_response(content=f"✅ {move_success}명을 대기실로 이동시켰습니다!")
+
+class BanRoleSelect(discord.ui.Select):
+    def __init__(self, role, heroes, parent_view):
+        self.parent_view = parent_view
+        options = [discord.SelectOption(label=h, value=h) for h in heroes if h not in parent_view.banned_heroes]
+        super().__init__(
+            placeholder=f"🚫 [{role}] 밴 선택 ({len(parent_view.banned_heroes)}/{parent_view.max_bans}개)",
+            options=options[:25], custom_id=f"ban_select_{role}"
+        )
+    
+    async def callback(self, interaction: discord.Interaction):
+        view = self.parent_view
+        if not (is_admin(interaction) or interaction.user.id in [c.id for c in view.captains]):
+            return await interaction.response.send_message("❌ 밴픽 권한이 없습니다.", ephemeral=True)
+        chosen = self.values[0]
+        view.banned_heroes.append(chosen)
+        if len(view.banned_heroes) >= view.max_bans: await view.execute_final(interaction)
+        else:
+            view.update_selects()
+            embed = build_horizontal_embed(view.teams, len(view.teams), f"🏆 [{view.set_count}세트] 밴픽 진행 중")
+            embed.add_field(name="🚫 현재 금지된 영웅 목록", value=", ".join(view.banned_heroes), inline=False)
+            await interaction.response.edit_message(embed=embed, view=view)
+
+class BanPickView(discord.ui.View):
+    def __init__(self, captains, teams, team_channels, ban_count, admin_channel, set_count=1):
+        super().__init__(timeout=None)
+        self.captains, self.teams, self.team_channels, self.admin_channel, self.set_count = captains, teams, team_channels, admin_channel, set_count
+        self.max_bans = ban_count * len(teams)
+        self.banned_heroes = []
+        self.update_selects()
+
+    def update_selects(self):
+        self.clear_items()
+        for role, heroes in OW_HEROES.items():
+            available = [h for h in heroes if h not in self.banned_heroes]
+            if available: self.add_item(BanRoleSelect(role, available, self))
+
+    async def execute_final(self, interaction):
+        save_data(MATCH_FILE, pack_match_data(self.teams))
+        
+        # 💡 [e스포츠 연출 적용] 공지 채널용 깔끔한 자막 송출
+        import datetime as dt
+        kst_time = (dt.datetime.now(dt.UTC) + dt.timedelta(hours=9)).strftime("%Y-%m-%d %H:%M")
+        ann_title = f"⚔️ [{self.set_count}세트] 공식 라인업 확정 ({kst_time})"
+        ann_msg = f"📢 **제 {self.set_count}세트 매치가 곧 시작됩니다. 선수들은 경기 준비를 부탁드립니다.**\n━━━━━━━━━━━━━━━━━━━━━━━━━"
+        
+        embed = build_horizontal_embed(self.teams, len(self.teams), ann_title)
+        embed.add_field(name="🚫 금지 영웅 (밴픽 완료)", value=", ".join(self.banned_heroes) if self.banned_heroes else "없음", inline=False)
+        await interaction.response.edit_message(content=ann_msg, embed=embed, view=None)
+        
+        ws_code = generate_workshop_code(self.teams, self.banned_heroes)
+        await self.admin_channel.send(content=f"⚙️ **[방장 컨트롤 패널 - {self.set_count}세트]** 내전 관리를 시작합니다.", view=AdminControlPanel(self.teams, self.team_channels, ws_code, self.captains, self.set_count))
+
+class ManualCaptainSelectView(discord.ui.View):
+    def __init__(self, teams, team_channels, set_count=1):
+        super().__init__(timeout=None)
+        self.teams, self.team_channels, self.set_count = teams, team_channels, set_count
+        self.c1, self.c2 = None, None
+
+        options_t1 = [discord.SelectOption(label=p.display_name, value=str(p.id)) for p in teams[0]]
+        self.s1 = discord.ui.Select(placeholder="👑 1팀 주장 선택...", options=options_t1, custom_id="cap_select_1")
+        options_t2 = [discord.SelectOption(label=p.display_name, value=str(p.id)) for p in teams[1]] if len(teams) > 1 else []
+        self.s2 = discord.ui.Select(placeholder="👑 2팀 주장 선택...", options=options_t2, custom_id="cap_select_2") if options_t2 else None
+
+        async def cb1(interaction: discord.Interaction):
+            self.c1 = interaction.guild.get_member(int(self.s1.values[0]))
+            await interaction.response.defer()
+        self.s1.callback = cb1
+        self.add_item(self.s1)
+        if self.s2:
+            async def cb2(interaction: discord.Interaction):
+                self.c2 = interaction.guild.get_member(int(self.s2.values[0]))
+                await interaction.response.defer()
+            self.s2.callback = cb2
+            self.add_item(self.s2)
+
+    @discord.ui.button(label="🚫 주장 확정 및 밴픽 시작", style=discord.ButtonStyle.danger, row=2)
+    async def go_banpick(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.c1 or (self.s2 and not self.c2): return await interaction.response.send_message("❌ 모든 팀의 주장을 선택해 주세요!", ephemeral=True)
+        captains = [self.c1]
+        if self.c2: captains.append(self.c2)
+        view = discord.ui.View()
+        view.add_item(DirectSelectBanCount(captains, self.teams, self.team_channels, interaction.channel, self.set_count))
+        await interaction.response.edit_message(content=f"⚖️ [{self.set_count}세트] 영웅 밴픽 개수를 정해주세요.", view=view)
+
+class MoveConfirmView(discord.ui.View):
+    def __init__(self, teams, team_channels, members, conditions, set_count=1):
+        super().__init__(timeout=None)
+        self.teams, self.team_channels, self.members, self.conditions, self.set_count = teams, team_channels, members, conditions, set_count
 
     @discord.ui.button(label="🔄 랜덤 다시 짜기 (조건유지)", style=discord.ButtonStyle.blurple)
     async def reroll_teams(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
         scores = load_data(SCORE_FILE)
         noisy_scores = {k: {"score": float(v.get("score",0)) + random.uniform(-1.0, 1.0)} for k, v in scores.items()}
-        
         new_teams, error_msg = divide_teams_with_conditions(self.members, len(self.teams), noisy_scores, self.conditions)
         if error_msg: return await interaction.followup.send(error_msg, ephemeral=True)
-            
         self.teams = new_teams
-        embed = build_horizontal_embed(self.teams, len(self.teams), "⚖️ 내전 밸런스 (조건 유지 재배치됨)")
+        embed = build_horizontal_embed(self.teams, len(self.teams), f"⚖️ [{self.set_count}세트] 내전 밸런스 (조건 유지 재배치됨)")
         await interaction.message.edit(embed=embed, view=self)
 
     @discord.ui.button(label="👥 수동 팀원 교체", style=discord.ButtonStyle.secondary)
     async def manual_swap(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.edit_message(content="🔄 맞교환할 인원을 선택하세요. (수동 교체는 조건을 무시합니다)", view=SwapView(self.teams, self.team_channels, self.members, self.conditions))
+        await interaction.response.edit_message(content="🔄 맞교환할 인원을 선택하세요.", view=SwapView(self.teams, self.team_channels, self.members, self.conditions, self.set_count))
         
     @discord.ui.button(label="👑 [최종 확정] 주장 선택 및 밴픽", style=discord.ButtonStyle.danger, row=1)
     async def finalize_move(self, interaction: discord.Interaction, button: discord.ui.Button):
         cfg = load_data(CONFIG_FILE)
-        if 'announce_id' not in cfg: return await interaction.response.send_message("❌ `!공지채널설정`이 되어 있지 않습니다!", ephemeral=True)
-        await interaction.response.edit_message(content="👑 각 팀의 주장을 드롭다운 메뉴에서 직접 선출해 주세요.", embed=None, view=ManualCaptainSelectView(self.teams, self.team_channels))
+        if 'announce_id' not in cfg: return await interaction.response.send_message("❌ `!공지채널설정`이 필요합니다!", ephemeral=True)
+        await interaction.response.edit_message(content=f"👑 [{self.set_count}세트] 각 팀의 주장을 선출해 주세요.", embed=None, view=ManualCaptainSelectView(self.teams, self.team_channels, self.set_count))
 
     @discord.ui.button(label="⏩ 밴픽 건너뛰기 (바로 공지)", style=discord.ButtonStyle.gray, row=1)
     async def skip_banpick_entirely(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -981,17 +933,21 @@ class MoveConfirmView(discord.ui.View):
         if announce_id:
             ann_channel = bot.get_channel(int(announce_id))
             if ann_channel:
-                embed = build_horizontal_embed(self.teams, len(self.teams), "🏆 [내전 매칭 성사] 최종 라인업! (밴픽 없음)")
-                await ann_channel.send(content="🔔 **내전 매칭이 확정되었습니다! (밴픽 생략)**", embed=embed)
+                # 💡 [e스포츠 연출 적용] 
+                import datetime as dt
+                kst_time = (dt.datetime.now(dt.UTC) + dt.timedelta(hours=9)).strftime("%Y-%m-%d %H:%M")
+                ann_title = f"⚔️ [{self.set_count}세트] 공식 라인업 확정 ({kst_time})"
+                ann_msg = f"📢 **제 {self.set_count}세트 매치가 곧 시작됩니다. 선수들은 경기 준비를 부탁드립니다.**\n━━━━━━━━━━━━━━━━━━━━━━━━━"
+                embed = build_horizontal_embed(self.teams, len(self.teams), ann_title)
+                await ann_channel.send(content=ann_msg, embed=embed)
                 
         ws_code = generate_workshop_code(self.teams, [])
-        await interaction.response.edit_message(content="⚙️ **[방장 컨트롤 패널]** 내전 관리를 시작합니다.", view=AdminControlPanel(self.teams, self.team_channels, ws_code, captains=None))
-
+        await interaction.response.edit_message(content=f"⚙️ **[방장 컨트롤 패널 - {self.set_count}세트]** 내전 관리를 시작합니다.", view=AdminControlPanel(self.teams, self.team_channels, ws_code, captains=None, set_count=self.set_count))
 
 class SwapView(discord.ui.View):
-    def __init__(self, teams, team_channels, members, conditions):
+    def __init__(self, teams, team_channels, members, conditions, set_count=1):
         super().__init__(timeout=None)
-        self.teams, self.team_channels, self.members, self.conditions = teams, team_channels, members, conditions
+        self.teams, self.team_channels, self.members, self.conditions, self.set_count = teams, team_channels, members, conditions, set_count
         options = [discord.SelectOption(label=p.display_name, value=str(p.id)) for t in teams for p in t]
         self.s1 = discord.ui.Select(placeholder="🔄 첫 번째 유저...", options=options, custom_id="swap_1")
         self.s2 = discord.ui.Select(placeholder="🔄 두 번째 유저...", options=options, custom_id="swap_2")
@@ -1012,10 +968,8 @@ class SwapView(discord.ui.View):
         p1, p2 = self.teams[u1_pos[0]][u1_pos[1]], self.teams[u2_pos[0]][u2_pos[1]]
         self.teams[u1_pos[0]][u1_pos[1]], self.teams[u2_pos[0]][u2_pos[1]] = p2, p1
         
-        embed = build_horizontal_embed(self.teams, len(self.teams), "⚖️ 내전 밸런스 조정 중 (수동 교체됨)")
-        await interaction.response.edit_message(content="✅ 교환 완료!", embed=embed, view=MoveConfirmView(self.teams, self.team_channels, self.members, self.conditions))
-
-# --- 👥 8. 내전 시작 및 인원 제외 UI ---
+        embed = build_horizontal_embed(self.teams, len(self.teams), f"⚖️ [{self.set_count}세트] 내전 밸런스 조정 중 (수동 교체됨)")
+        await interaction.response.edit_message(content="✅ 교환 완료!", embed=embed, view=MoveConfirmView(self.teams, self.team_channels, self.members, self.conditions, self.set_count))
 
 @bot.command(name='내전시작')
 async def start_civil_war(ctx):
