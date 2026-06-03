@@ -881,8 +881,12 @@ class DirectSelectBanCount(discord.ui.Select):
         
         bp_view = BanPickView(self.caps, self.tms, self.chans, count, self.admin_ch, self.set_count)
         msg = f"👑 **[{self.set_count}세트 밴픽 진행]** 각 팀 주장: " + " / ".join([c.mention for c in self.caps]) + "\n🚨 주장들은 공지 채널의 역할군별 메뉴에서 밴할 영웅을 선택해 주세요!"
-        await ann_ch.send(content=msg, view=bp_view)
-        await interaction.response.edit_message(content=f"✅ 공지 채널에 {self.set_count}세트 밴픽 화면을 띄웠습니다!", view=None)
+        
+        # 💡 [수정된 부분] 밴픽 시작 시 양 팀의 라인업 표(임베드)를 함께 출력합니다.
+        embed = build_horizontal_embed(self.tms, len(self.tms), f"🏆 [{self.set_count}세트] 밴픽 진행 중")
+        
+        await ann_ch.send(content=msg, embed=embed, view=bp_view)
+        await interaction.response.edit_message(content=f"✅ 공지 채널에 {self.set_count}세트 밴픽 화면을 띄웠습니다!", view=None)3
 
 class NextSetConfirmView(discord.ui.View):
     def __init__(self, teams, team_channels, captains, set_count=1, ws_code=None, ann_msg_obj=None):
