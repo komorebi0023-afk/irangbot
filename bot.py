@@ -30,14 +30,21 @@ def get_daily_data():
 def save_daily_data(data):
     save_data(DAILY_FILE, data)
 
-# 💡 [신규] 10분마다 음성 채널 유저에게 5P 지급 (루프)
+# 💡 [업데이트됨] 10분마다 음성 채널 유저에게 1~5P 랜덤 지급 (2명 이상 접속 시)
 @tasks.loop(minutes=10)
 async def voice_reward_loop():
     for guild in bot.guilds:
         for vc in guild.voice_channels:
-            for member in vc.members:
-                if not member.bot and not member.voice.afk and not member.voice.self_deaf:
-                    add_points(member.id, 5)
+            # 봇을 제외한 실제 유저만 리스트로 추려냅니다.
+            real_members = [m for m in vc.members if not m.bot]
+            
+            # 실제 유저가 2명 이상일 때만 포인트를 지급합니다.
+            if len(real_members) >= 2:
+                for member in real_members:
+                    # AFK(잠수) 채널이 아니며, 헤드셋(귀청) 차단을 하지 않은 유저만 획득
+                    if not member.voice.afk and not member.voice.self_deaf:
+                        reward = random.randint(1, 5) # 1~5 포인트 랜덤 획득
+                        add_points(member.id, reward)
                     
 import asyncio
 import re
