@@ -237,6 +237,32 @@ async def check_profile(ctx, member: discord.Member = None):
     else:
         await ctx.send(f"❌ **{target.display_name}** 님의 데이터가 구글 시트에 없습니다.")
 
+@bot.command(name='포인트')
+async def manage_points(ctx, member: discord.Member, op: str):
+    if not is_admin(ctx): return await ctx.send("❌ 관리자 전용 명령어입니다.")
+    uid = str(member.id)
+    current = get_points(uid)
+    
+    try:
+        if op.startswith('+'):
+            val = int(op[1:])
+            add_points(uid, val)
+        elif op.startswith('-'):
+            val = int(op[1:])
+            add_points(uid, -val)
+        elif op.startswith('='):
+            val = int(op[1:])
+            data = load_data(BETTING_FILE)
+            data[uid] = val
+            save_data(BETTING_FILE, data)
+        else:
+            return await ctx.send("❌ 올바른 형식을 사용하세요. 예: `!포인트 @유저 +500` 또는 `=1000`")
+        
+        new_pt = get_points(uid)
+        await ctx.send(f"✅ **{member.display_name}**님의 포인트가 변경되었습니다: `{current:,} P` ➡️ `{new_pt:,} P`")
+    except ValueError:
+        await ctx.send("❌ 숫자 형식이 잘못되었습니다.")
+
 @bot.command(name='랭킹')
 async def show_ranking(ctx):
     scores = load_data(SCORE_FILE)
@@ -743,63 +769,6 @@ class WinButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         await self.panel.record_result(interaction, f"{self.team_idx+1}팀", self.team_idx)
 
-class NextSetConfirmView(discord.ui.View):
-    def __init__(self, teams, team_channels, captains, set_count=1):
-        super().__init__(timeout=None)
-        self.teams, self.team_channels, self.captains, self.set_count = teams, team_channels, captains, set_count
-
-    @discord.ui.button(label="🔄 현재 멤버 그대로 다음 세트 진행", style=discord.ButtonStyle.success, row=0)
-    async def next_set_ban(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not is_admin(interaction): return await interaction.response.send_message("❌ 관리자 권한이 없습니다.", ephemeral=True)
-        next_set = self.set_count + 1
-        
-        if self.captains is None or len(self.captains) == 0:
-            await interaction.response.edit_message(
-                content=f"👑 [{next_set}세트] 이전 판에 밴픽을 스킵하여 주장 데이터가 없습니다. 주장을 선출해 주세요.", 
-                embed=None, view=ManualCaptainSelectView(self.teams, self.team_channels, next_set)
-            )
-        else:
-            view = discord.ui.View()
-            view.add_item(DirectSelectBanCount(self.captains, self.teams, self.team_channels, interaction.channel, next_set))
-            await interaction.response.edit_message(content=f"⚖️ [{next_set}세트] 다음 세트의 밴픽 개수를 정해주세요.", view=view)
-
-    @discord.ui.button(label="⏩ 다음 세트 밴픽 건너뛰기", style=discord.ButtonStyle.secondary, row=0)
-    async def next_set_skip(self, interaction: discord.Interaction, button: discord.ui.Button):
-        next_set = self.set_count + 1
-        cfg = load_data(CONFIG_FILE)
-        ann_ch = bot.get_channel(int(cfg.get('announce_id'))) if cfg.get('announce_id') else interaction.channel
-        
-        import datetime as dt
-        kst_time = (dt.datetime.now(dt.UTC) + dt.timedelta(hours=9)).strftime("%Y-%m-%d %H:%M")
-        ann_title = f"⚔️ [{next_set}세트] 공식 라인업 확정 ({kst_time})"
-        ann_msg = f"📢 **제 {next_set}세트 매치가 곧 시작됩니다. 선수들은 경기 준비를 부탁드립니다.**\n━━━━━━━━━━━━━━━━━━━━━━━━━"
-        embed = build_horizontal_embed(self.teams, len(self.teams), ann_title)
-        
-        # 💡 공지 메시지를 보내고 그 객체를 패널에 넘겨줍니다.
-        ann_msg_obj = await ann_ch.send(content=ann_msg, embed=embed)
-        ws_code = generate_workshop_code(self.teams, [])
-        await interaction.response.edit_message(content=f"⚙️ **[방장 컨트롤 패널 - {next_set}세트]** 다음 세트 관리를 시작합니다.", view=AdminControlPanel(self.teams, self.team_channels, ws_code, self.captains, next_set, ann_msg_obj))
-
-    @discord.ui.button(label="🛑 연전 종료 (새로 팀 짜기)", style=discord.ButtonStyle.danger, row=1)
-    async def end_match(self, interaction: discord.Interaction, button: discord.ui.Button):
-        for child in self.children: child.disabled = True
-        await interaction.response.edit_message(content="✅ 수고하셨습니다! 다음 내전을 진행하려면 `!내전시작`을 입력해 주세요.", view=self)
-
-    @discord.ui.button(label="↩️ 대기실 복귀", style=discord.ButtonStyle.primary, row=1)
-    async def return_lobby(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("⏳ 경기 중인 팀원들을 고정 메인 대기실로 복귀시킵니다...", ephemeral=True)
-        cfg = load_data(CONFIG_FILE)
-        lobby_id = cfg.get('lobby_id')
-        main_lobby = bot.get_channel(int(lobby_id)) if lobby_id else None
-        if not main_lobby: return await interaction.edit_original_response(content="❌ 고정 메인 대기실 채널을 찾을 수 없습니다.")
-        move_success = 0
-        for team in self.teams:
-            for p in team:
-                if hasattr(p, 'voice') and p.voice:
-                    try: await p.move_to(main_lobby); move_success += 1
-                    except: pass
-        await interaction.edit_original_response(content=f"✅ {move_success}명의 팀원을 대기실({main_lobby.name})로 복귀시켰습니다!")
-
 # 💡 [업데이트됨] 배팅 모달 및 타이머 뷰 (선수 배팅 차단 로직 추가)
 class BetModal(discord.ui.Modal, title="💰 포인트 배팅"):
     amount_input = discord.ui.TextInput(label="배팅할 금액 (숫자 또는 '올인')", placeholder="예: 500, 올인")
@@ -965,6 +934,101 @@ class NextSetConfirmView(discord.ui.View):
                     except: pass
         await interaction.edit_original_response(content=f"✅ {move_success}명의 팀원을 대기실로 복귀시켰습니다!")
 
+class NextSetConfirmView(discord.ui.View):
+    def __init__(self, teams, team_channels, captains, set_count=1, ws_code=None, ann_msg_obj=None):
+        super().__init__(timeout=None)
+        self.teams, self.team_channels, self.captains, self.set_count = teams, team_channels, captains, set_count
+        self.ws_code = ws_code
+        self.ann_msg_obj = ann_msg_obj
+
+    @discord.ui.button(label="🔄 현재 멤버 그대로 다음 세트 진행", style=discord.ButtonStyle.success, row=0)
+    async def next_set_ban(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_admin(interaction): return await interaction.response.send_message("❌ 권한이 없습니다.", ephemeral=True)
+        next_set = self.set_count + 1
+        
+        if not self.captains:
+            await interaction.response.edit_message(content=f"👑 [{next_set}세트] 밴픽 주장 데이터가 없습니다. 주장을 선출해 주세요.", embed=None, view=ManualCaptainSelectView(self.teams, self.team_channels, next_set))
+        else:
+            view = discord.ui.View()
+            view.add_item(DirectSelectBanCount(self.captains, self.teams, self.team_channels, interaction.channel, next_set))
+            await interaction.response.edit_message(content=f"⚖️ [{next_set}세트] 다음 세트의 밴픽 개수를 정해주세요.", view=view)
+
+    @discord.ui.button(label="⏩ 다음 세트 밴픽 건너뛰기", style=discord.ButtonStyle.secondary, row=0)
+    async def next_set_skip(self, interaction: discord.Interaction, button: discord.ui.Button):
+        next_set = self.set_count + 1
+        cfg = load_data(CONFIG_FILE)
+        ann_ch = bot.get_channel(int(cfg.get('announce_id'))) if cfg.get('announce_id') else interaction.channel
+        
+        import datetime as dt
+        kst_time = (dt.datetime.now(dt.UTC) + dt.timedelta(hours=9)).strftime("%Y-%m-%d %H:%M")
+        ann_title = f"⚔️ [{next_set}세트] 공식 라인업 확정 ({kst_time})"
+        ann_msg = f"📢 **제 {next_set}세트 매치가 곧 시작됩니다. 5분간 배팅이 진행됩니다!**\n━━━━━━━━━━━━━━━━━━━━━━━━━"
+        embed = build_horizontal_embed(self.teams, len(self.teams), ann_title)
+        
+        ann_msg_obj = await ann_ch.send(content=ann_msg, embed=embed)
+        bet_view = BettingView(ann_msg_obj, self.teams) 
+        await ann_msg_obj.edit(view=bet_view)
+        await bet_view.update_msg()
+        
+        ws_code = generate_workshop_code(self.teams, [])
+        await interaction.response.edit_message(content=f"⚙️ **[방장 컨트롤 패널 - {next_set}세트]** 다음 세트 관리를 시작합니다.", view=AdminControlPanel(self.teams, self.team_channels, ws_code, self.captains, next_set, ann_msg_obj))
+
+    @discord.ui.button(label="🛑 연전 종료 (새로 팀 짜기)", style=discord.ButtonStyle.danger, row=1)
+    async def end_match(self, interaction: discord.Interaction, button: discord.ui.Button):
+        for child in self.children: child.disabled = True
+        await interaction.response.edit_message(content="✅ 수고하셨습니다! 다음 내전을 진행하려면 `!내전시작`을 입력해 주세요.", view=self)
+
+    @discord.ui.button(label="↩️ 대기실 복귀", style=discord.ButtonStyle.primary, row=1)
+    async def return_lobby(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("⏳ 경기 중인 팀원들을 대기실로 복귀시킵니다...", ephemeral=True)
+        cfg = load_data(CONFIG_FILE)
+        lobby_id = cfg.get('lobby_id')
+        main_lobby = bot.get_channel(int(lobby_id)) if lobby_id else None
+        if not main_lobby: return await interaction.edit_original_response(content="❌ 대기실 채널을 찾을 수 없습니다.")
+        move_success = 0
+        for team in self.teams:
+            for p in team:
+                if hasattr(p, 'voice') and p.voice:
+                    try: await p.move_to(main_lobby); move_success += 1
+                    except: pass
+        await interaction.edit_original_response(content=f"✅ {move_success}명을 대기실로 이동시켰습니다!")
+
+    # 💡 [새로 추가됨] 실수 연출 롤백(타임머신) 기능
+    @discord.ui.button(label="⚠️ 직전 승리/정산 되돌리기", style=discord.ButtonStyle.danger, row=2)
+    async def undo_match(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_admin(interaction): return await interaction.response.send_message("❌ 권한이 없습니다.", ephemeral=True)
+        await interaction.response.defer()
+        
+        # 1. 분배된 포인트 정확히 회수
+        if hasattr(global_betting, 'last_transactions'):
+            for uid, amt in global_betting.last_transactions.items():
+                add_points(uid, -amt)
+            global_betting.last_transactions = {}
+            
+        # 2. 구글 시트 맨 마지막 줄(오기입 데이터) 삭제
+        client, sheet_key = get_google_client()
+        if client and sheet_key:
+            try:
+                record_sheet = client.open_by_key(sheet_key).worksheet("전적")
+                rows = record_sheet.get_all_values()
+                if len(rows) > 1: record_sheet.delete_rows(len(rows)) # 1번 줄(헤더) 보호
+            except: pass
+            
+        # 3. 공지 메시지 시각적 복구
+        if self.ann_msg_obj:
+            try:
+                embed = self.ann_msg_obj.embeds[0]
+                embed.color = discord.Color.gold()
+                embed.title = f"⚔️ [{self.set_count}세트] 공식 라인업 확정 (결과 보류)"
+                embed.set_footer(text="⏳ 배팅 풀이 보존되었습니다. 방장의 최종 결과를 대기 중입니다.")
+                await self.ann_msg_obj.edit(content=f"📢 **제 {self.set_count}세트 경기 결과를 기다리고 있습니다!**\n━━━━━━━━━━━━━━━━━━━━━━━━━", embed=embed, view=None)
+            except: pass
+            
+        # 4. 방장 패널을 처음 상태로 재소환
+        for child in self.children: child.disabled = True
+        await interaction.message.edit(content="⚠️ **[실수 롤백 완료]** 정산이 취소되고 배팅 풀이 그대로 복구되었습니다. 올바른 승리 팀을 다시 선택해 주세요.", view=AdminControlPanel(self.teams, self.team_channels, self.ws_code, self.captains, self.set_count, self.ann_msg_obj))
+
+
 class AdminControlPanel(discord.ui.View):
     def __init__(self, teams, team_channels, ws_code, captains, set_count=1, ann_msg_obj=None):
         super().__init__(timeout=None)
@@ -978,9 +1042,15 @@ class AdminControlPanel(discord.ui.View):
         await interaction.response.send_message(f"⏳ 구글 시트에 기록 및 배팅 정산 중...", ephemeral=True)
         if global_betting.active: global_betting.active = False
         
+        # 💡 [새로 추가됨] 롤백을 위한 트랜잭션(거래) 장부 기록
+        global_betting.last_transactions = {}
+        def give_pts(u_id, amt):
+            add_points(u_id, amt)
+            global_betting.last_transactions[str(u_id)] = global_betting.last_transactions.get(str(u_id), 0) + amt
+
         for i, team in enumerate(self.teams):
             reward = 300 if (i == team_idx) else 100
-            for p in team: add_points(p.id, reward)
+            for p in team: give_pts(p.id, reward)
 
         p_win = sum(global_betting.bets[winner].values())
         opp_team = "1팀" if winner == "2팀" else "2팀"
@@ -990,13 +1060,13 @@ class AdminControlPanel(discord.ui.View):
         if p_win > 0:
             if p_lose == 0:
                 bet_results_text = f"\n💸 상대 팀에 걸린 포인트가 없어 원금만 반환되었습니다."
-                for uid, amt in global_betting.bets[winner].items(): add_points(uid, amt)
+                for uid, amt in global_betting.bets[winner].items(): give_pts(uid, amt)
             else:
                 ratio = p_lose / p_win
                 bet_results_text = f"\n📈 **적중 배당률:** 1.0 + {ratio:.2f}배 터짐!"
                 for uid, amt in global_betting.bets[winner].items():
                     profit = int(amt * ratio)
-                    add_points(uid, amt + profit)
+                    give_pts(uid, amt + profit)
                     
         if self.ann_msg_obj:
             try:
@@ -1022,7 +1092,9 @@ class AdminControlPanel(discord.ui.View):
                 ]
                 record_sheet.append_row(row_data) 
                 for child in self.children: child.disabled = True
-                await interaction.message.edit(content=f"✅ **[{self.set_count}세트 {winner} 승리 기록 완료]** 동일한 멤버로 다음 세트를 진행하시겠습니까?", view=NextSetConfirmView(self.teams, self.team_channels, self.captains, self.set_count))
+                
+                # 💡 롤백을 위해 상태 객체들을 다음 뷰로 통째로 넘겨줌
+                await interaction.message.edit(content=f"✅ **[{self.set_count}세트 {winner} 승리 기록 완료]** 동일한 멤버로 다음 세트를 진행하시겠습니까?", view=NextSetConfirmView(self.teams, self.team_channels, self.captains, self.set_count, self.ws_code, self.ann_msg_obj))
                 await interaction.edit_original_response(content=f"✅ 배팅 정산 및 구글 시트 저장이 완료되었습니다!")
             except Exception as e:
                 await interaction.edit_original_response(content=f"❌ 기록 실패: {e}")
