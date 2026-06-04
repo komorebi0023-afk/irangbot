@@ -551,24 +551,41 @@ class ResetConfirmView(discord.ui.View):
     async def confirm_reset(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user != self.ctx.author: return
         await interaction.response.defer()
+        
+        # 1. 디스코드 로컬 DB 삭제
         conn = sqlite3.connect('database.db')
         c = conn.cursor()
         c.execute("DELETE FROM user_stats WHERE guild_id=?", (self.guild_id,))
         conn.commit()
         conn.close()
+        
+        # 2. 구글 시트 연동 데이터 삭제
         cfg = get_server_config(self.guild_id)
         sheet_msg = ""
         if cfg and cfg.get("sheet_key"):
             try:
                 client = get_google_client()
-                sheet = client.open_by_key(cfg["sheet_key"]).get_worksheet(0)
-                rows = sheet.get_all_values()
-                if len(rows) >= 6: 
-                    # ✅ 행 자체를 삭제하지 않고, A열부터 M열까지의 '내용'만 싹 지웁니다.
-                    # (지워야 하는 열이 더 넓다면 M 대신 Z 등으로 알파벳을 늘려주세요)
-                    sheet.batch_clear([f'A6:M{len(rows)}']) 
-                sheet_msg = "\n📊 구글 시트 데이터(6행부터)도 초기화되었습니다."
-            except Exception as e: sheet_msg = f"\n⚠️ 구글 시트 삭제 중 오류 발생: {e}"
+                doc = client.open_by_key(cfg["sheet_key"])
+                
+                # ① 메인 유저 데이터 시트 (첫 번째 시트) 6행부터 A~K 클리어
+                main_sheet = doc.get_worksheet(0)
+                main_rows = main_sheet.get_all_values()
+                if len(main_rows) >= 6: 
+                    main_sheet.batch_clear([f'A6:K{len(main_rows)}'])
+                    
+                # ② 전적 시트 2행부터 A~H 클리어
+                try:
+                    record_sheet = doc.worksheet("전적")
+                    record_rows = record_sheet.get_all_values()
+                    if len(record_rows) >= 2:
+                        record_sheet.batch_clear([f'A2:H{len(record_rows)}'])
+                except Exception as e:
+                    print(f"전적 시트 초기화 실패 (시트명 확인 필요): {e}")
+                    
+                sheet_msg = "\n📊 구글 시트 (유저 데이터 6행~, 전적 기록 2행~)가 모두 초기화되었습니다."
+            except Exception as e: 
+                sheet_msg = f"\n⚠️ 구글 시트 삭제 중 오류 발생: {e}"
+                
         for child in self.children: child.disabled = True
         await interaction.message.edit(content=f"💥 **서버 데이터베이스가 완전히 초기화되었습니다.**{sheet_msg}", view=self)
 
