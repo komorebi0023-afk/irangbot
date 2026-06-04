@@ -534,23 +534,41 @@ async def auto_sync_scores(guild_id):
         conn = sqlite3.connect('database.db')
         c = conn.cursor()
         sync_count = 0
+        
+        # 💡 시트 구조 매핑: 0:A(빈칸), 1:B(ID), 2:C(디코닉), 3:D(배틀태그), 4:E(옵치닉), 
+        # 5:F(주포), 6:G(부포), 7:H(최고티어), 8:I(현재티어), 9:J(주영웅), 10:K(점수)
         for i in range(5, len(rows)):
             row = rows[i]
-            if len(row) >= 2 and row[1].strip(): 
-                nickname = row[0].strip() if len(row) > 0 else "-"
+            # B열(ID)이 존재할 때만 읽어옴
+            if len(row) > 1 and row[1].strip(): 
                 uid = row[1].strip()
-                score = float(row[2]) if len(row) > 2 and row[2].strip().replace('.','',1).isdigit() else 0.0
-                main_pos = row[3].strip() if len(row) > 3 else "-"
-                main_hero = row[4].strip() if len(row) > 4 else "-"
+                nickname = row[2].strip() if len(row) > 2 else "-"
                 battletag = row[3].strip() if len(row) > 3 else "-"
-                c.execute('''UPDATE user_stats SET nickname=?, score=?, main_pos=?, main_hero=?, battletag=? WHERE guild_id=? AND user_id=?''', (nickname, score, main_pos, main_hero, battletag, str(guild_id), uid))
+                main_pos = row[5].strip() if len(row) > 5 else "-"
+                sub_pos = row[6].strip() if len(row) > 6 else "-"
+                max_tier = row[7].strip() if len(row) > 7 else "-"
+                current_tier = row[8].strip() if len(row) > 8 else "-"
+                main_hero = row[9].strip() if len(row) > 9 else "-"
+                
+                # 점수 파싱 (K열)
+                score_str = row[10].strip() if len(row) > 10 else "0"
+                score = float(score_str) if score_str.replace('.','',1).isdigit() else 0.0
+                
+                c.execute('''UPDATE user_stats SET nickname=?, score=?, main_pos=?, sub_pos=?, max_tier=?, current_tier=?, main_hero=?, battletag=? WHERE guild_id=? AND user_id=?''', 
+                          (nickname, score, main_pos, sub_pos, max_tier, current_tier, main_hero, battletag, str(guild_id), uid))
+                
                 if c.rowcount == 0:
-                    c.execute('''INSERT INTO user_stats (guild_id, user_id, nickname, score, main_pos, main_hero, battletag) VALUES (?, ?, ?, ?, ?, ?, ?)''', (str(guild_id), uid, nickname, score, main_pos, main_hero, battletag))
+                    c.execute('''INSERT INTO user_stats (guild_id, user_id, nickname, score, main_pos, sub_pos, max_tier, current_tier, main_hero, battletag) 
+                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', 
+                              (str(guild_id), uid, nickname, score, main_pos, sub_pos, max_tier, current_tier, main_hero, battletag))
                 sync_count += 1
+                
         conn.commit()
         conn.close()
         return sync_count
-    except Exception as e: return False
+    except Exception as e:
+        print(f"동기화 에러: {e}")
+        return False
 
 @bot.command(name='동기화')
 async def sync_data(ctx):
