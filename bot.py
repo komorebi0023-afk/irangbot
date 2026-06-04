@@ -65,10 +65,19 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS active_match (
                     guild_id TEXT PRIMARY KEY, match_data TEXT
                  )''')
-    # 💡 [신규] 역할 저장 테이블 추가
     c.execute('''CREATE TABLE IF NOT EXISTS server_roles (
                     guild_id TEXT, role_key TEXT, role_id TEXT,
                     PRIMARY KEY (guild_id, role_key)
+                 )''')
+    # 💡 [신규] 매치 히스토리 (전적 롤백용 영수증)
+    c.execute('''CREATE TABLE IF NOT EXISTS match_history (
+                    match_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    guild_id TEXT,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    team1_users TEXT,
+                    team2_users TEXT,
+                    winner_team INTEGER,
+                    score_change REAL
                  )''')
     conn.commit()
     conn.close()
@@ -1242,6 +1251,9 @@ class AdminControlPanel(discord.ui.View):
                 await self.ann_msg_obj.edit(content=f"🎉 **{winner} 승리!**" + bet_results_text, embed=embed, view=None)
             except: pass
 
+        # 💡 [신규] SQLite DB에 승수/패수 반영 및 매치 히스토리 저장
+        match_id = await record_match_db_and_history(gid, self.teams, team_idx)
+
         cfg = get_server_config(gid)
         client = get_google_client()
         if client and cfg.get("sheet_key"):
@@ -1249,7 +1261,7 @@ class AdminControlPanel(discord.ui.View):
                 record_sheet = client.open_by_key(cfg["sheet_key"]).worksheet("전적")
                 match_data = load_match_data(gid)
                 kst_time = (dt.datetime.now(dt.UTC) + dt.timedelta(hours=9)).strftime("%Y-%m-%d %H:%M")
-                row_data = [kst_time, f"{winner} 승리", 
+                row_data = [f"No.{match_id}", f"{winner} 승리", 
                             ", ".join(match_data.get('t1_nicks', [])), ", ".join(match_data.get('t1_ids', [])), ", ".join(match_data.get('t1_btags', [])),
                             ", ".join(match_data.get('t2_nicks', [])), ", ".join(match_data.get('t2_ids', [])), ", ".join(match_data.get('t2_btags', []))]
                 record_sheet.append_row(row_data)
@@ -1260,8 +1272,8 @@ class AdminControlPanel(discord.ui.View):
         for c in self.children: c.disabled = True
         await interaction.message.edit(content=f"✅ **[{self.set_count}세트 완료]**", view=self)
         
-        # 💡 [복구완료] 다전제 다음 세트 질문 UI
-        await interaction.channel.send(content=f"🔄 동일한 멤버로 다음 세트를 진행하시겠습니까?", view=NextSetConfirmView(self.teams, self.captains, self.set_count, self.ws_code, self.ann_msg_obj))
+        # 💡 [복구완료] 다전제 다음 세트 질문 UI 전환
+        await interaction.channel.send(content=f"🔄 세트가 종료되었습니다. (이번 경기 No.{match_id}) 다음 진행 방식을 선택하세요.", view=NextSetConfirmView(self.teams, self.captains, self.set_count, self.ws_code, self.ann_msg_obj))
         await status_msg.edit(content="✅ 처리 완료!")
 
     @discord.ui.button(label="🔊 음성 분배", style=discord.ButtonStyle.secondary, row=1)
@@ -1319,14 +1331,13 @@ class AdminControlPanel(discord.ui.View):
         for child in self.children: child.disabled = True
         await interaction.message.edit(content="🛑 경기 무효 처리 완료.", view=self)
 
-# 💡 [복구완료] 다전제 세트 진행 뷰
 class NextSetConfirmView(discord.ui.View):
     def __init__(self, teams, captains, set_count=1, ws_code="", ann_msg_obj=None):
         super().__init__(timeout=None)
         self.teams, self.captains, self.set_count = teams, captains, set_count
         self.ws_code, self.ann_msg_obj = ws_code, ann_msg_obj
 
-    @discord.ui.button(label="⏩ 밴픽 건너뛰고 바로 공지 (다음 세트)", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="⏩ 노밴픽 진행 (다음 세트)", style=discord.ButtonStyle.primary, row=0)
     async def next_set_skip(self, interaction: discord.Interaction, button: discord.ui.Button):
         next_set = self.set_count + 1
         cfg = get_server_config(interaction.guild.id)
@@ -1343,13 +1354,39 @@ class NextSetConfirmView(discord.ui.View):
         
         await interaction.response.edit_message(content=f"⚙️ **[방장 컨트롤 패널 - {next_set}세트]**", view=AdminControlPanel(self.teams, next_set, ann_msg, self.ws_code, self.captains))
         
-    @discord.ui.button(label="🚫 다시 밴픽하기 (다음 세트)", style=discord.ButtonStyle.danger, row=0)
+    @discord.ui.button(label="🚫 밴픽 진행 (다음 세트)", style=discord.ButtonStyle.danger, row=0)
     async def next_set_ban(self, interaction: discord.Interaction, button: discord.ui.Button):
         next_set = self.set_count + 1
-        if not self.captains: return await interaction.response.send_message("❌ 주장 정보가 없어 밴픽을 열 수 없습니다.", ephemeral=True)
+        caps = self.captains
+        
+        # 💡 [복구완료] 중도 밴픽 시 주장이 없으면 자동 선출
+        if not caps or None in caps:
+            caps = []
+            for t in self.teams:
+                if not t: continue
+                c = max(t, key=lambda x: get_user_data(str(interaction.guild.id), str(x.id)).get('score', 0))
+                caps.append(c)
+            await interaction.channel.send(f"⚠️ **주장 정보가 없어, 각 팀의 최고 점수자를 자동으로 주장 선출했습니다.**\n" + " / ".join([c.mention for c in caps]))
+            
         view = discord.ui.View()
-        view.add_item(DirectSelectBanCount(self.captains, self.teams, interaction.channel, next_set))
+        view.add_item(DirectSelectBanCount(caps, self.teams, interaction.channel, next_set))
         await interaction.response.edit_message(content=f"⚖️ [{next_set}세트] 영웅 밴픽 개수를 정해주세요.", view=view)
+
+    # 💡 [복구완료] 연전 종료 및 팀 새로짜기 버튼 추가
+    @discord.ui.button(label="🔄 연전 종료 및 팀 새로짜기", style=discord.ButtonStyle.success, row=1)
+    async def stop_series(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="🔄 **연전을 완전히 종료합니다. 새로운 내전을 위해 `!내전시작`을 입력해주세요.**", view=None)
+
+    # 💡 [복구완료] 승리 확정 패널로 되돌리기 버튼 추가
+    @discord.ui.button(label="⏪ 직전 경기 무효 (결과 되돌리기)", style=discord.ButtonStyle.secondary, row=1)
+    async def undo_match(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_admin(interaction): return await interaction.response.send_message("❌ 관리자 전용", ephemeral=True)
+        await interaction.response.defer()
+        success = await cancel_match_logic(interaction.guild.id, None) # None = 최근 경기 취소
+        if success:
+            await interaction.message.edit(content="⏪ **직전 경기 결과가 무효 처리되고 전적이 롤백되었습니다.** (다시 승리 팀을 선택해주세요.)", view=AdminControlPanel(self.teams, self.set_count, self.ann_msg_obj, self.ws_code, self.captains))
+        else:
+            await interaction.followup.send("❌ 취소할 경기 기록을 찾을 수 없습니다.", ephemeral=True)
 
 
 class BanRoleSelect(discord.ui.Select):
@@ -1402,6 +1439,7 @@ class BanPickAdminPanel(discord.ui.View):
     def __init__(self, teams):
         super().__init__(timeout=None)
         self.teams = teams
+        
     @discord.ui.button(label="🔊 음성 채널 분배", style=discord.ButtonStyle.secondary, row=0)
     async def move_voice(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
@@ -1415,6 +1453,20 @@ class BanPickAdminPanel(discord.ui.View):
                         try: await p.move_to(bot.get_channel(int(ch_id))); success += 1
                         except: pass
         await interaction.followup.send(f"✅ 분배 완료 ({success}명)!", ephemeral=True)
+
+    # 💡 [복구완료] 대기실 복귀 버튼
+    @discord.ui.button(label="↩️ 대기실 복귀", style=discord.ButtonStyle.danger, row=0)
+    async def return_lobby(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        cfg = get_server_config(interaction.guild.id)
+        if cfg.get("lobby_id") and bot.get_channel(int(cfg["lobby_id"])):
+            lobby = bot.get_channel(int(cfg["lobby_id"]))
+            for t in self.teams:
+                for p in t:
+                    if hasattr(p, 'voice') and p.voice:
+                        try: await p.move_to(lobby)
+                        except: pass
+        await interaction.followup.send("✅ 대기실 복귀 완료! 기존 로비를 파기하고 다시 팀을 짭니다.", ephemeral=True)
 
 class DirectSelectBanCount(discord.ui.Select):
     def __init__(self, caps, tms, admin_ch, set_cnt):
@@ -1834,6 +1886,122 @@ async def test_civil_war(ctx):
     sample = random.sample(rows, min(8, len(rows)))
     dummy = [DummyUser(int(r['user_id']), r['nickname']) for r in sample]
     await ctx.send(f"🛠️ **[테스트 모드 가동]** {len(dummy)}명의 가상 유저 구성 완료.", view=ExcludeSelectView(dummy))
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 📋 전적 관리 시스템 (저장, 취소, 초기화)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def record_match_db_and_history(guild_id, teams, winner_idx):
+    conn = sqlite3.connect('database.db')
+    c = conn.cursor()
+    
+    # 1. DB에 유저 승수, 패수 실시간 반영
+    for i, team in enumerate(teams):
+        is_win = (i == winner_idx)
+        for p in team:
+            uid = str(p.id)
+            c.execute("SELECT wins, losses FROM user_stats WHERE guild_id=? AND user_id=?", (guild_id, uid))
+            row = c.fetchone()
+            if row:
+                wins_str, losses_str = row[0], row[1]
+                w = int(re.search(r'\d+', str(wins_str)).group() if re.search(r'\d+', str(wins_str)) else 0)
+                l = int(re.search(r'\d+', str(losses_str)).group() if re.search(r'\d+', str(losses_str)) else 0)
+                if is_win: w += 1
+                else: l += 1
+                c.execute("UPDATE user_stats SET wins=?, losses=? WHERE guild_id=? AND user_id=?", (str(w), str(l), guild_id, uid))
+                
+    # 2. 롤백용 영수증 (match_history) 저장
+    t1_ids = json.dumps([str(p.id) for p in teams[0]] if len(teams)>0 else [])
+    t2_ids = json.dumps([str(p.id) for p in teams[1]] if len(teams)>1 else [])
+    c.execute("INSERT INTO match_history (guild_id, team1_users, team2_users, winner_team, score_change) VALUES (?, ?, ?, ?, ?)",
+              (guild_id, t1_ids, t2_ids, winner_idx + 1, 0))
+    match_id = c.lastrowid
+    conn.commit()
+    conn.close()
+    return match_id
+
+async def cancel_match_logic(guild_id, match_id=None):
+    conn = sqlite3.connect('database.db')
+    c = conn.cursor()
+    if match_id is None: # match_id 안 주면 가장 최근 경기 취소
+        c.execute("SELECT match_id, team1_users, team2_users, winner_team FROM match_history WHERE guild_id=? ORDER BY match_id DESC LIMIT 1", (str(guild_id),))
+    else:
+        c.execute("SELECT match_id, team1_users, team2_users, winner_team FROM match_history WHERE match_id=? AND guild_id=?", (match_id, str(guild_id)))
+    row = c.fetchone()
+    if not row:
+        conn.close()
+        return False
+        
+    m_id, t1_ids_str, t2_ids_str, winner_team = row
+    t1_ids = json.loads(t1_ids_str)
+    t2_ids = json.loads(t2_ids_str)
+    
+    # 승패 롤백 계산 함수
+    def rollback_team(uids, is_winner):
+        for uid in uids:
+            c.execute("SELECT wins, losses FROM user_stats WHERE guild_id=? AND user_id=?", (str(guild_id), uid))
+            user_data = c.fetchone()
+            if user_data:
+                wins_str, losses_str = user_data[0], user_data[1]
+                w = int(re.search(r'\d+', str(wins_str)).group() if re.search(r'\d+', str(wins_str)) else 0)
+                l = int(re.search(r'\d+', str(losses_str)).group() if re.search(r'\d+', str(losses_str)) else 0)
+                if is_winner: w = max(0, w - 1)
+                else: l = max(0, l - 1)
+                c.execute("UPDATE user_stats SET wins=?, losses=? WHERE guild_id=? AND user_id=?", (str(w), str(l), str(guild_id), uid))
+                
+    rollback_team(t1_ids, winner_team == 1)
+    rollback_team(t2_ids, winner_team == 2)
+    
+    # 기록 장부에서 해당 영수증 파기
+    c.execute("DELETE FROM match_history WHERE match_id=?", (m_id,))
+    conn.commit()
+    conn.close()
+    
+    # 동기화
+    for uid in t1_ids + t2_ids:
+        member = bot.get_guild(int(guild_id)).get_member(int(uid))
+        if member:
+            db_data = get_user_data(str(guild_id), uid)
+            await sync_user_to_sheet(str(guild_id), member, db_data)
+            await auto_sync_user_roles(str(guild_id), member, db_data)
+    return True
+
+@bot.command(name='특정경기취소')
+async def cancel_specific_match(ctx, match_id: int):
+    if not is_admin(ctx): return
+    success = await cancel_match_logic(ctx.guild.id, match_id)
+    if success: await ctx.send(f"✅ **No.{match_id} 경기 기록이 취소되고 관여자들의 전적이 롤백되었습니다.**")
+    else: await ctx.send("❌ 해당 번호의 경기 기록을 찾을 수 없습니다.")
+
+@bot.command(name='최근경기취소')
+async def cancel_latest_match(ctx):
+    if not is_admin(ctx): return
+    success = await cancel_match_logic(ctx.guild.id, None)
+    if success: await ctx.send(f"✅ **가장 최근 경기가 취소되고 시트에 롤백되었습니다.**")
+    else: await ctx.send("❌ 취소할 최근 경기 기록이 없습니다.")
+
+@bot.command(name='전적초기화')
+async def reset_stats(ctx, target: str = None):
+    if not is_admin(ctx): return
+    if not target: return await ctx.send("❌ 사용법: `!전적초기화 전체` 또는 `!전적초기화 @유저`")
+    conn = sqlite3.connect('database.db')
+    c = conn.cursor()
+    
+    if target == "전체":
+        c.execute("UPDATE user_stats SET score=0.0, wins='0', losses='0' WHERE guild_id=?", (str(ctx.guild.id),))
+        c.execute("DELETE FROM match_history WHERE guild_id=?", (str(ctx.guild.id),))
+        conn.commit()
+        await ctx.send("⚠️ **서버 내 모든 유저의 전적과 점수가 초기화되었습니다.**\n*(시트 동기화는 `!동기화` 명령어를 한 번 쳐주세요)*")
+    else:
+        if not ctx.message.mentions: return await ctx.send("❌ 대상을 멘션해주세요.")
+        target_user = ctx.message.mentions[0]
+        uid = str(target_user.id)
+        c.execute("UPDATE user_stats SET score=0.0, wins='0', losses='0' WHERE guild_id=? AND user_id=?", (str(ctx.guild.id), uid))
+        conn.commit()
+        db_data = get_user_data(str(ctx.guild.id), uid)
+        await sync_user_to_sheet(str(ctx.guild.id), target_user, db_data)
+        await auto_sync_user_roles(str(ctx.guild.id), target_user, db_data)
+        await ctx.send(f"✅ **{target_user.display_name}** 님의 전적과 점수가 초기화되고 시트에 반영되었습니다.")
+    conn.close()
 
 # 실행
 token = os.environ.get('BOT_TOKEN')
