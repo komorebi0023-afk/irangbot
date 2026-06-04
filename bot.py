@@ -681,20 +681,28 @@ async def manage_points(ctx, member: discord.Member, op: str):
         await ctx.send(f"✅ **{member.display_name}**님의 포인트: `{current:,} P` ➡️ `{new_pt:,} P`")
     except: await ctx.send("❌ 숫자 형식이 잘못되었습니다.")
 
-@bot.command(name='점수')
+@bot.command(name='정보')
 async def check_profile(ctx, member: discord.Member = None):
     target = member or ctx.author
     data = get_user_data(str(ctx.guild.id), str(target.id))
-    if not data or data.get('score', 0) == 0: return await ctx.send(f"❌ **{target.display_name}** 님의 전적 데이터가 없습니다.")
+    
+    # 💡 !입장을 마쳤는지 확인 (포지션이나 배틀태그가 기본값 '-' 인지 체크)
+    if not data or (data.get('main_pos', '-') == '-' and data.get('battletag', '-') == '-'):
+        return await ctx.send(f"❌ **{target.display_name}** 님은 아직 `!입장` 등록을 완료하지 않으셨습니다.")
+    
+    # 💡 점수가 0점이면 '미정'으로 표시
+    score_val = data.get('score', 0)
+    display_score = "미정" if score_val == 0 else f"{score_val:g} 점"
     
     embed = discord.Embed(title=f"📋 {target.display_name} 프로필", color=discord.Color.blue())
-    embed.add_field(name="🎯 내전 점수", value=f"**{data.get('score', 0):g} 점**", inline=True)
+    embed.add_field(name="🎯 내전 점수", value=f"**{display_score}**", inline=True)
     embed.add_field(name="💰 포인트", value=f"**{data.get('points', 0):,} P**", inline=True)
     embed.add_field(name="닉네임", value=data.get('nickname', '-'), inline=False)
     embed.add_field(name="주 영웅", value=data.get('main_hero', '-'), inline=True)
     embed.add_field(name="🏆 누적 전적", value=f"{data.get('losses', '-')} (승: {data.get('wins', '-')})", inline=False)
     embed.add_field(name="포지션", value=f"{data.get('main_pos', '-')} / {data.get('sub_pos', '-')}", inline=True)
     embed.set_thumbnail(url=target.display_avatar.url)
+    
     await ctx.send(embed=embed)
 
 @bot.command(name='랭킹')
