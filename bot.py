@@ -279,7 +279,20 @@ async def on_ready():
     if not voice_reward_loop.is_running():
         voice_reward_loop.start() # 봇 켜지면 10분마다 5P 주는 루프 시작
 
-        
+@bot.event
+async def on_message(message):
+    if message.author.bot: return
+    
+    # 💡 30초 쿨타임마다 채팅 1~5P 랜덤 지급
+    uid = str(message.author.id)
+    now = time.time()
+    if uid not in chat_cooldowns or (now - chat_cooldowns[uid]) >= 30:
+        reward = random.randint(1, 5)
+        add_points(uid, reward)
+        chat_cooldowns[uid] = now
+        
+    await bot.process_commands(message) # (필수) 명령어 처리가 안 씹히게 하는 코드
+
 # --- 🎯 2. 기본 유틸 및 명령어 (복구 완료) ---
 @bot.command(name='점수')
 async def check_profile(ctx, member: discord.Member = None):
@@ -393,39 +406,6 @@ async def add_admin(ctx, member: discord.Member):
         config['admins'] = admins
         save_data(CONFIG_FILE, config)
     await ctx.send(f"✅ **{member.display_name}** 님이 봇 관리자로 등록되었습니다.")
-
-@bot.command(name='비밀초대')
-async def secret_invite(ctx):
-    # 💡 이 명령어는 서버가 아닌 봇과의 DM(개인 메시지)에서만 작동합니다.
-    if ctx.guild is not None:
-        return 
-        
-    if not bot.guilds:
-        return await ctx.send("❌ 봇이 현재 어떤 서버에도 소속되어 있지 않습니다.")
-        
-    # 봇이 속해 있는 첫 번째 서버를 타겟으로 잡습니다.
-    guild = bot.guilds[0]
-    
-    # 초대장을 만들 수 있는 텍스트 채널을 찾아서 초대 코드를 생성합니다.
-    for channel in guild.text_channels:
-        try:
-            # max_age=300 (5분 뒤 만료), max_uses=1 (1번 쓰면 사라짐)
-            invite = await channel.create_invite(max_age=300, max_uses=1, unique=True, reason="비밀 초대")
-            return await ctx.send(f"🎟️ 비밀 초대 링크가 생성되었습니다 (5분 후 만료, 1회용):\n{invite.url}")
-        except:
-            continue # 이 채널에 권한이 없으면 다음 채널로 시도
-            
-    await ctx.send("❌ 서버 내에 봇이 초대장을 생성할 권한이 있는 채널이 없습니다.")
-
-
-@bot.event
-async def on_message(message):
-    # 💡 [핵심] 시스템에서 보낸 '누군가 입장했습니다' 메시지인지 확인하고 즉시 삭제!
-    if message.type == discord.MessageType.new_member:
-        try:
-            await message.delete()
-            return
-
 
 @bot.command(name='명령어')
 
