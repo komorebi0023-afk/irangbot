@@ -263,6 +263,48 @@ async def on_message(message):
     await bot.process_commands(message)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🗑️ 서버 탈퇴 유저 데이터 자동 삭제 로직
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+@bot.event
+async def on_member_remove(member):
+    guild_id = str(member.guild.id)
+    user_id = str(member.id)
+    
+    # 1. DB에서 유저 데이터 조용히 삭제
+    conn = sqlite3.connect('database.db')
+    c = conn.cursor()
+    c.execute("DELETE FROM user_stats WHERE guild_id=? AND user_id=?", (guild_id, user_id))
+    deleted_from_db = c.rowcount > 0
+    conn.commit()
+    conn.close()
+    
+    # DB에 애초에 등록된 데이터가 없었다면 여기서 조용히 종료
+    if not deleted_from_db:
+        return
+        
+    # 2. 구글 시트에서 해당 유저의 '행(Row)' 전체 삭제
+    cfg = get_server_config(guild_id)
+    if cfg and cfg.get("sheet_key"):
+        try:
+            client = get_google_client()
+            sheet = client.open_by_key(cfg["sheet_key"]).get_worksheet(0)
+            rows = sheet.get_all_values()
+            
+            target_row_idx = -1
+            # 6행부터 내려가면서 B열(인덱스 1)의 디스코드 ID가 일치하는 줄 찾기
+            for i in range(5, len(rows)):
+                if len(rows[i]) > 1 and rows[i][1].strip() == user_id:
+                    target_row_idx = i + 1  # gspread는 1번 줄부터 시작하므로 +1
+                    break
+            
+            # 찾았다면 해당 행을 통째로 삭제 (아래 데이터가 위로 당겨짐)
+            if target_row_idx != -1:
+                sheet.delete_rows(target_row_idx)
+                print(f"[조용히 삭제 완료] {member.display_name} 님의 데이터가 DB 및 구글 시트({target_row_idx}행)에서 제거되었습니다.")
+        except Exception as e:
+            print(f"[삭제 에러] {member.display_name} 님의 구글 시트 행 삭제 실패: {e}")
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # ⚙️ 다중 서버 환경 세팅 및 데이터 동기화
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 class ServerSettingModal(discord.ui.Modal, title="⚙️ 멀티 서버 통합 세팅"):
