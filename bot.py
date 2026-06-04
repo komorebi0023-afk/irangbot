@@ -278,58 +278,227 @@ async def server_setup(ctx):
     view.add_item(btn)
     await ctx.send("아래 버튼을 눌러 서버 환경을 설정하세요.", view=view)
 
-class UserManageModal(discord.ui.Modal, title="👤 유저 정보 등록/수정"):
-    user_id_input = discord.ui.TextInput(label="디스코드 ID (필수)", required=True)
-    nickname = discord.ui.TextInput(label="닉네임 (또는 배틀태그)", required=True)
-    score = discord.ui.TextInput(label="내전 점수", placeholder="예: 2500", required=True)
-    main_pos = discord.ui.TextInput(label="주 포지션", required=False)
-    main_hero = discord.ui.TextInput(label="모스트 영웅", required=False)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 👤 유저 자율 등록(!입장), 관리자 관리 및 부분 수정 UI (채팅형 흐름)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def get_ow_nickname(battletag):
+    if not battletag or battletag == "-": return "-"
+    return battletag.split('#')[0].strip()
 
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        gid = str(interaction.guild_id)
-        uid = self.user_id_input.value.strip()
+async def sync_user_to_sheet(guild_id, member, db_data):
+    cfg = get_server_config(guild_id)
+    if not cfg or not cfg.get("sheet_key"): return
+    
+    uid = str(member.id)
+    discord_nick = member.display_name.split(' (')[0] # 기존 괄호가 있다면 제거한 순수 디코 닉네임
+    battletag = db_data.get('battletag', '-')
+    ow_nick = get_ow_nickname(battletag)
+    
+    update_data = [
+        "", # A열 (빈칸)
+        uid, # B열: 디스코드 ID
+        discord_nick, # C열: 디스코드 닉네임
+        battletag, # D열: 배틀태그
+        ow_nick, # E열: 오버워치 닉네임
+        db_data.get('main_pos', '-'), # F열: 주 포지션
+        db_data.get('sub_pos', '-'), # G열: 보조 포지션
+        db_data.get('max_tier', '-'), # H열: 최고 티어
+        db_data.get('current_tier', '-'), # I열: 현재 티어
+        db_data.get('main_hero', '-'), # J열: 주 영웅
+        db_data.get('score', 0.0) # K열: 내전 점수
+    ]
+    
+    try:
+        client = get_google_client()
+        sheet = client.open_by_key(cfg["sheet_key"]).get_worksheet(0)
+        rows = sheet.get_all_values()
+        row_idx = -1
+        for i, row in enumerate(rows):
+            if i >= 5 and len(row) > 1 and row[1].strip() == uid: 
+                row_idx = i + 1; break
+                
+        if row_idx != -1: sheet.update(f'A{row_idx}:K{row_idx}', [update_data])
+        else: sheet.append_row(update_data, table_range='A6')
+    except Exception as e:
+        print(f"시트 연동 에러: {e}")
+
+# --- 1단계: 포지션 & 티어 선택 뷰 ---
+class PositionTierView(discord.ui.View):
+    def __init__(self, db_data):
+        super().__init__(timeout=120)
+        self.result = db_data.copy()
+        self.is_done = False
         
-        conn = sqlite3.connect('database.db')
-        c = conn.cursor()
-        c.execute('''UPDATE user_stats SET nickname=?, score=?, main_pos=?, main_hero=? WHERE guild_id=? AND user_id=?''',
-                  (self.nickname.value, float(self.score.value), self.main_pos.value, self.main_hero.value, gid, uid))
-        if c.rowcount == 0:
-            c.execute('''INSERT INTO user_stats (guild_id, user_id, nickname, score, main_pos, main_hero) VALUES (?, ?, ?, ?, ?, ?)''', 
-                      (gid, uid, self.nickname.value, float(self.score.value), self.main_pos.value, self.main_hero.value))
-        conn.commit()
-        conn.close()
+        pos_opts = [discord.SelectOption(label=x, value=x) for x in ["돌격", "공격", "지원", "자유"]]
+        sub_pos_opts = pos_opts + [discord.SelectOption(label="없음", value="없음")]
+        tier_opts = [discord.SelectOption(label=x, value=x) for x in ["언랭", "브론즈", "실버", "골드", "플래티넘", "다이아몬드", "마스터", "그랜드마스터", "챔피언"]]
+        
+        self.s1 = discord.ui.Select(placeholder="1. 주 포지션 선택", options=pos_opts, custom_id="m_pos")
+        self.s2 = discord.ui.Select(placeholder="2. 보조 포지션 선택", options=sub_pos_opts, custom_id="s_pos")
+        self.s3 = discord.ui.Select(placeholder="3. 최고 티어 선택", options=tier_opts, custom_id="max_t")
+        self.s4 = discord.ui.Select(placeholder="4. 현재 티어 선택", options=tier_opts, custom_id="cur_t")
+        
+        async def cb(interaction):
+            sel = interaction.data["custom_id"]
+            val = interaction.data["values"][0]
+            if sel == "m_pos": self.result['main_pos'] = val
+            elif sel == "s_pos": self.result['sub_pos'] = val
+            elif sel == "max_t": self.result['max_tier'] = val
+            elif sel == "cur_t": self.result['current_tier'] = val
+            await interaction.response.defer()
+            
+        for s in [self.s1, self.s2, self.s3, self.s4]: s.callback = cb; self.add_item(s)
 
-        msg = f"✅ **{self.nickname.value}** 님의 데이터가 디스코드 DB에 저장되었습니다."
-        cfg = get_server_config(gid)
-        if cfg and cfg.get("sheet_key"):
-            try:
-                client = get_google_client()
-                sheet = client.open_by_key(cfg["sheet_key"]).get_worksheet(0)
-                rows = sheet.get_all_values()
-                row_idx = -1
-                for i, row in enumerate(rows):
-                    if i >= 5 and len(row) > 1 and row[1].strip() == uid: 
-                        row_idx = i + 1; break
-                update_data = [self.nickname.value, uid, self.score.value, self.main_pos.value, self.main_hero.value]
-                if row_idx != -1: sheet.update(f'A{row_idx}:E{row_idx}', [update_data])
-                else: sheet.append_row(update_data, table_range='A6')
-                msg += "\n📊 구글 시트에도 실시간으로 덮어씌웠습니다!"
-            except Exception as e: msg += f"\n⚠️ 구글 시트 연동 에러: {e}"
+    @discord.ui.button(label="➡️ 다음 단계로 (영웅 선택)", style=discord.ButtonStyle.primary, row=4)
+    async def nxt(self, interaction: discord.Interaction, btn):
+        self.is_done = True
+        await interaction.response.defer()
+        self.stop()
 
-        await interaction.followup.send(msg, ephemeral=True)
+# --- 2단계: 모스트 영웅 선택 뷰 ---
+class HeroSelectView(discord.ui.View):
+    def __init__(self, db_data):
+        super().__init__(timeout=120)
+        self.result = db_data.copy()
+        self.selected_heroes = []
+        self.is_done = False
+        
+        async def cb(interaction):
+            self.selected_heroes.extend(interaction.data["values"])
+            await interaction.response.defer()
+
+        for role, heroes in OW_HEROES.items():
+            opts = [discord.SelectOption(label=h, value=h) for h in heroes[:25]]
+            sel = discord.ui.Select(placeholder=f"{role} 모스트 영웅 (선택)", options=opts, min_values=0, max_values=3, custom_id=f"h_{role}")
+            sel.callback = cb
+            self.add_item(sel)
+
+    @discord.ui.button(label="✅ 영웅 선택 완료", style=discord.ButtonStyle.success, row=3)
+    async def nxt(self, interaction: discord.Interaction, btn):
+        if self.selected_heroes:
+            # 중복 제거 후 최대 3개까지만 텍스트로 저장
+            self.result['main_hero'] = ", ".join(list(set(self.selected_heroes))[:3]) 
+        self.is_done = True
+        await interaction.response.defer()
+        self.stop()
+
+# --- 통합 흐름 제어 함수 ---
+async def run_user_setup_flow(ctx, target_member, fields, is_admin):
+    gid, uid = str(ctx.guild.id), str(target_member.id)
+    db_data = get_user_data(gid, uid)
+    
+    def check_msg(m): return m.author == ctx.author and m.channel == ctx.channel
+
+    # 1. 포지션 & 티어
+    if 'all' in fields or 'pos_tier' in fields:
+        view1 = PositionTierView(db_data)
+        msg1 = await ctx.send(f"🔹 **[{target_member.display_name}]** 님의 포지션과 티어를 모두 선택한 후 `[다음 단계로]` 버튼을 눌러주세요.", view=view1)
+        await view1.wait()
+        if not view1.is_done: return await msg1.edit(content="⏳ 시간 초과로 취소되었습니다.", view=None)
+        db_data.update(view1.result)
+        await msg1.delete()
+
+    # 2. 모스트 영웅
+    if 'all' in fields or 'hero' in fields:
+        view2 = HeroSelectView(db_data)
+        msg2 = await ctx.send(f"🔹 **[{target_member.display_name}]** 님의 모스트 영웅을 골라주세요. (각 포지션별 복수 선택 가능)", view=view2)
+        await view2.wait()
+        if not view2.is_done: return await msg2.edit(content="⏳ 시간 초과로 취소되었습니다.", view=None)
+        db_data.update(view2.result)
+        await msg2.delete()
+
+    # 3. 배틀태그 (텍스트 입력)
+    if 'all' in fields or 'battletag' in fields:
+        msg3 = await ctx.send(f"⌨️ **[{target_member.display_name}]** 님의 **배틀태그**를 채팅으로 입력해주세요. (예: 겐지장인#1234)\n*(건너뛰려면 `스킵` 입력)*")
+        try:
+            m = await bot.wait_for('message', check=check_msg, timeout=60.0)
+            if m.content.strip() != "스킵":
+                db_data['battletag'] = m.content.strip()
+                db_data['nickname'] = target_member.display_name.split(' (')[0]
+            await msg3.delete(); await m.delete(delay=1)
+        except asyncio.TimeoutError: return await msg3.edit(content="⏳ 시간 초과로 취소되었습니다.")
+
+    # 4. 내전 점수 (텍스트 입력, 관리자만 가능)
+    if is_admin and ('all' in fields or 'score' in fields):
+        msg4 = await ctx.send(f"🎯 **[{target_member.display_name}]** 님의 **내전 점수(1~100점)**를 채팅으로 입력해주세요.\n*(숫자만 입력)*")
+        try:
+            m = await bot.wait_for('message', check=check_msg, timeout=60.0)
+            val = m.content.strip()
+            if val.isdigit() and 1 <= int(val) <= 100:
+                db_data['score'] = float(val)
+            else:
+                await ctx.send("⚠️ 점수는 1~100 사이의 숫자로만 저장됩니다. (기본값 유지됨)", delete_after=5)
+            await msg4.delete(); await m.delete(delay=1)
+        except asyncio.TimeoutError: return await msg4.edit(content="⏳ 시간 초과로 취소되었습니다.")
+
+    # DB 저장
+    conn = sqlite3.connect('database.db')
+    c = conn.cursor()
+    c.execute('''UPDATE user_stats SET nickname=?, battletag=?, score=?, main_pos=?, sub_pos=?, max_tier=?, current_tier=?, main_hero=? WHERE guild_id=? AND user_id=?''',
+              (db_data['nickname'], db_data['battletag'], db_data['score'], db_data['main_pos'], db_data['sub_pos'], db_data['max_tier'], db_data['current_tier'], db_data['main_hero'], gid, uid))
+    conn.commit()
+    conn.close()
+
+    # 시트 연동
+    status_msg = await ctx.send("⏳ 데이터를 DB와 구글 시트에 저장하는 중입니다...")
+    await sync_user_to_sheet(gid, target_member, db_data)
+
+    # 닉네임 자동 변경 (권한 에러 예외 처리 포함)
+    ow_nick = get_ow_nickname(db_data['battletag'])
+    if ow_nick != "-":
+        new_nick = f"{db_data['nickname']} ({ow_nick})"
+        if len(new_nick) > 32: new_nick = new_nick[:32]
+        try:
+            await target_member.edit(nick=new_nick)
+            nick_msg = f"\n✅ 서버 닉네임이 `{new_nick}`(으)로 자동 변경되었습니다."
+        except discord.errors.Forbidden:
+            nick_msg = f"\n⚠️ (봇 권한 문제로 닉네임 자동 변경은 생략되었습니다. 정보는 정상 저장됨!)"
+    else:
+        nick_msg = ""
+
+    await status_msg.edit(content=f"🎉 **[{target_member.display_name}]** 님의 데이터 설정이 완벽하게 끝났습니다!{nick_msg}")
+
+
+class EditTargetSelect(discord.ui.Select):
+    def __init__(self, target_member, is_admin):
+        self.target_member = target_member
+        self.is_admin = is_admin
+        opts = [
+            discord.SelectOption(label="전체 새로 입력", description="모든 정보를 백지부터 다시 기입합니다.", value="all"),
+            discord.SelectOption(label="포지션 및 티어 수정", value="pos_tier"),
+            discord.SelectOption(label="모스트 영웅 수정", value="hero"),
+            discord.SelectOption(label="배틀태그 수정", value="battletag")
+        ]
+        if is_admin:
+            opts.append(discord.SelectOption(label="내전 점수 수정", description="관리자 전용", value="score"))
+            
+        super().__init__(placeholder="수정할 항목을 선택해주세요...", min_values=1, max_values=len(opts), options=opts)
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(content="🔄 선택하신 항목의 수정을 시작합니다...", view=None)
+        await run_user_setup_flow(interaction.message, self.target_member, self.values, self.is_admin)
 
 @bot.command(name='유저관리')
-async def manage_user(ctx):
-    if not is_admin(ctx): return
+async def manage_user(ctx, member: discord.Member = None):
+    if not is_admin(ctx): return await ctx.send("❌ 관리자만 사용할 수 있습니다.")
+    if not member: return await ctx.send("❌ 사용법: `!유저관리 @유저명`")
+    
     view = discord.ui.View()
-    btn = discord.ui.Button(label="📝 유저 데이터 작성/수정", style=discord.ButtonStyle.success)
-    async def btn_cb(interaction):
-        if not is_admin(interaction): return
-        await interaction.response.send_modal(UserManageModal())
-    btn.callback = btn_cb
-    view.add_item(btn)
-    await ctx.send("아래 버튼을 눌러 유저 데이터를 깔끔하게 입력하세요.", view=view)
+    view.add_item(EditTargetSelect(member, is_admin=True))
+    await ctx.send(f"🛠️ **[{member.display_name}]** 유저 관리 패널입니다. 수정할 항목을 선택하세요.", view=view)
+
+@bot.command(name='입장')
+async def self_register(ctx):
+    # 유저 자율 초기 등록 (점수 제외 all)
+    await ctx.send(f"👋 환영합니다, **{ctx.author.display_name}**님! 내전 등록 절차를 시작합니다.")
+    await run_user_setup_flow(ctx, ctx.author, ['all'], is_admin=False)
+
+@bot.command(name='정보수정')
+async def self_update(ctx):
+    view = discord.ui.View()
+    view.add_item(EditTargetSelect(ctx.author, is_admin=False))
+    await ctx.send(f"🔧 **[{ctx.author.display_name}]** 님의 정보 수정 패널입니다. 수정할 항목을 선택하세요.", view=view)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async def auto_sync_scores(guild_id):
     cfg = get_server_config(guild_id)
@@ -389,7 +558,10 @@ class ResetConfirmView(discord.ui.View):
                 client = get_google_client()
                 sheet = client.open_by_key(cfg["sheet_key"]).get_worksheet(0)
                 rows = sheet.get_all_values()
-                if len(rows) >= 6: sheet.delete_rows(6, len(rows))
+                if len(rows) >= 6: 
+                    # ✅ 행 자체를 삭제하지 않고, A열부터 M열까지의 '내용'만 싹 지웁니다.
+                    # (지워야 하는 열이 더 넓다면 M 대신 Z 등으로 알파벳을 늘려주세요)
+                    sheet.batch_clear([f'A6:M{len(rows)}']) 
                 sheet_msg = "\n📊 구글 시트 데이터(6행부터)도 초기화되었습니다."
             except Exception as e: sheet_msg = f"\n⚠️ 구글 시트 삭제 중 오류 발생: {e}"
         for child in self.children: child.disabled = True
