@@ -312,13 +312,27 @@ async def sync_user_to_sheet(guild_id, member, db_data):
         client = get_google_client()
         sheet = client.open_by_key(cfg["sheet_key"]).get_worksheet(0)
         rows = sheet.get_all_values()
-        row_idx = -1
-        for i, row in enumerate(rows):
-            if i >= 5 and len(row) > 1 and row[1].strip() == uid: 
-                row_idx = i + 1; break
+        
+        target_row_idx = -1
+        
+        # 1. 먼저 이미 등록된 유저인지 확인 (B열의 디스코드 ID로 비교)
+        for i in range(5, len(rows)):
+            if len(rows[i]) > 1 and rows[i][1].strip() == uid: 
+                target_row_idx = i + 1 # gspread는 1번 줄부터 시작하므로 +1
+                break
                 
-        if row_idx != -1: sheet.update(f'A{row_idx}:K{row_idx}', [update_data])
-        else: sheet.append_row(update_data, table_range='A6')
+        # 2. 신규 유저라면 6행부터 내려가며 B열이 '빈칸'인 첫 번째 행을 찾음
+        if target_row_idx == -1:
+            target_row_idx = len(rows) + 1 # 기본적으로 데이터가 꽉 차있으면 맨 밑 새 줄에 추가
+            for i in range(5, len(rows)):
+                # 행의 길이가 짧거나 B열(인덱스 1)이 비어있다면 그곳이 빈 줄!
+                if len(rows[i]) < 2 or not rows[i][1].strip():
+                    target_row_idx = i + 1
+                    break
+                    
+        # 3. 찾은 빈 행(또는 기존 유저 행)에 정확히 덮어쓰기 (append_row 안 씀)
+        sheet.update(f'A{target_row_idx}:K{target_row_idx}', [update_data])
+        
     except Exception as e:
         print(f"시트 연동 에러: {e}")
 
