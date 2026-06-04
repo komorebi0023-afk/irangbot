@@ -431,7 +431,13 @@ async def on_message(message):
     if message.type == discord.MessageType.new_member:
         try:
             await message.delete()
-            return
+            return # 시스템 메시지는 아래 로직을 탈 필요가 없으므로 여기서 종료
+        except:
+            pass # 봇에게 메시지 삭제 권한(Manage Messages)이 없으면 무시
+
+    if message.author.bot: return
+    await bot.process_commands(message) # 명령어 씹힘 방지 (필수)
+
 
 
 @bot.command(name='명령어')
