@@ -574,17 +574,6 @@ async def manage_user(ctx, member: discord.Member = None):
     view.add_item(EditTargetSelect(ctx, member, is_admin=True))
     await ctx.send(f"🛠️ **[{member.display_name}]** 유저 관리 패널입니다. 수정할 항목을 선택하세요.", view=view)
 
-@bot.command(name='입장')
-async def self_register(ctx):
-    # 💡 이미 등록된 유저인지 확인 (포지션이나 배틀태그가 등록되어 있으면 차단)
-    data = get_user_data(str(ctx.guild.id), str(ctx.author.id))
-    if data and (data.get('main_pos', '-') != '-' or data.get('battletag', '-') != '-'):
-        return await ctx.send(f"❌ **{ctx.author.display_name}** 님은 이미 내전 등록을 완료하셨습니다!\n(정보 수정이 필요하다면 `!정보수정` 명령어를 사용해주세요.)")
-        
-    # 유저 자율 초기 등록 (점수 제외 all)
-    await ctx.send(f"👋 환영합니다, **{ctx.author.display_name}**님! 내전 등록 절차를 시작합니다.")
-    await run_user_setup_flow(ctx, ctx.author, ['all'], is_admin=False)
-
 @bot.command(name='정보수정')
 async def self_update(ctx):
     view = discord.ui.View()
@@ -1653,6 +1642,135 @@ async def set_tier_role(ctx, tier_name: str, role: discord.Role = None):
     else:
         set_role_id(ctx.guild.id, f"tier_{tier_name}", None)
         await ctx.send(f"✅ **{tier_name}** 티어 역할 설정이 해제되었습니다.")
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🚀 1:1 비공개 입장 자동화 시스템 (대기열 Lock 적용)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# 💡 서버별로 현재 입장 중인 유저가 있는지 체크하는 자물쇠(Lock) 딕셔너리
+entry_locks = {}
+
+async def run_ephemeral_entry_flow(interaction: discord.Interaction):
+    gid = str(interaction.guild_id)
+    uid = str(interaction.user.id)
+    db_data = get_user_data(gid, uid)
+    
+    try:
+        # 1단계: 포지션 & 티어 (비공개 뷰)
+        view1 = PositionTierView(db_data)
+        await interaction.response.send_message(f"🔹 **[{interaction.user.display_name}]**님, 아래에서 포지션과 티어를 선택해주세요.\n*(나에게만 보이는 비공개 메시지입니다)*", view=view1, ephemeral=True)
+        await view1.wait()
+        if not view1.is_done: 
+            return await interaction.edit_original_response(content="⏳ 2분 초과로 자동 취소되었습니다. 다시 버튼을 눌러주세요.", view=None)
+        db_data.update(view1.result)
+        
+        # 2단계: 모스트 영웅 (비공개 뷰 수정)
+        view2 = HeroSelectView(db_data)
+        await interaction.edit_original_response(content="🔹 모스트 영웅을 선택해주세요. (각 포지션별 복수 선택 가능)", view=view2)
+        await view2.wait()
+        if not view2.is_done:
+            return await interaction.edit_original_response(content="⏳ 2분 초과로 자동 취소되었습니다. 다시 버튼을 눌러주세요.", view=None)
+        db_data.update(view2.result)
+        
+        # 3단계: 배틀태그 텍스트 입력 (채팅 입력 유도 후 즉시 삭제)
+        await interaction.edit_original_response(content="⌨️ 현재 채널 채팅창에 **배틀태그**를 입력해주세요. (예: 겐지장인#1234)\n*(입력하신 채팅은 0.1초 만에 자동 삭제되며 남들에게 보이지 않습니다! 건너뛰려면 `스킵` 입력)*", view=None)
+        
+        def check_msg(m): return m.author == interaction.user and m.channel == interaction.channel
+        
+        try:
+            m = await bot.wait_for('message', check=check_msg, timeout=120.0)
+            await m.delete() # 💡 유저가 친 채팅 즉시 삭제
+            if m.content.strip() != "스킵":
+                db_data['battletag'] = m.content.strip()
+                db_data['nickname'] = interaction.user.display_name.split(' (')[0]
+        except asyncio.TimeoutError:
+            return await interaction.edit_original_response(content="⏳ 입력 시간이 초과되었습니다. 다시 버튼을 눌러주세요.")
+        
+        # 데이터 저장 안내 (비공개)
+        await interaction.edit_original_response(content="🎉 정보가 성공적으로 등록되었습니다! 곧 채널에 프로필이 공개됩니다.")
+        
+        # DB 저장
+        conn = sqlite3.connect('database.db')
+        c = conn.cursor()
+        c.execute('''UPDATE user_stats SET nickname=?, battletag=?, main_pos=?, sub_pos=?, max_tier=?, current_tier=?, main_hero=? WHERE guild_id=? AND user_id=?''',
+                  (db_data['nickname'], db_data.get('battletag', '-'), db_data['main_pos'], db_data['sub_pos'], db_data['max_tier'], db_data['current_tier'], db_data['main_hero'], gid, uid))
+        conn.commit()
+        conn.close()
+
+        # 시트 및 역할 동기화
+        await sync_user_to_sheet(gid, interaction.user, db_data)
+        await auto_sync_user_roles(gid, interaction.user, db_data, is_first_entry=True)
+        
+        # 닉네임 변경 (권한 오류 패스)
+        ow_nick = get_ow_nickname(db_data.get('battletag', '-'))
+        if ow_nick != "-":
+            new_nick = f"{db_data['nickname']} ({ow_nick})"
+            if len(new_nick) > 32: new_nick = new_nick[:32]
+            try: await interaction.user.edit(nick=new_nick)
+            except discord.errors.Forbidden: pass
+
+        # !정보 명령어와 완벽히 동일한 임베드 생성
+        score_val = db_data.get('score', 0)
+        display_score = "미정" if score_val == 0 else f"{score_val:g} 점"
+        w_match = re.search(r'\d+', str(db_data.get('wins', '0')))
+        l_match = re.search(r'\d+', str(db_data.get('losses', '0')))
+        w = int(w_match.group()) if w_match else 0
+        l = int(l_match.group()) if l_match else 0
+        total = w + l
+        win_rate = (w / total * 100) if total > 0 else 0.0
+
+        embed = discord.Embed(title=f"📋 {interaction.user.display_name} 프로필 (입장 완료)", color=discord.Color.green())
+        embed.add_field(name="🎯 내전 점수", value=f"**{display_score}**", inline=True)
+        embed.add_field(name="💰 포인트", value=f"**{db_data.get('points', 0):,} P**", inline=True)
+        embed.add_field(name="배틀태그", value=db_data.get('battletag', '-'), inline=False)
+        embed.add_field(name="티어 (최고 / 현재)", value=f"{db_data.get('max_tier', '-')} / {db_data.get('current_tier', '-')}", inline=True)
+        embed.add_field(name="포지션 (주 / 부)", value=f"{db_data.get('main_pos', '-')} / {db_data.get('sub_pos', '-')}", inline=True)
+        embed.add_field(name="주 영웅", value=db_data.get('main_hero', '-'), inline=False)
+        embed.add_field(name="🏆 누적 전적", value=f"{w}승 {l}패 **(승률 {win_rate:.1f}%)**", inline=False)
+        embed.set_thumbnail(url=interaction.user.display_avatar.url)
+        
+        # 채널에 프로필과 함께 '다음 유저를 위한 버튼' 새로 발사
+        await interaction.channel.send(content=f"🎉 **{interaction.user.mention}** 님의 내전 등록이 완료되었습니다!", embed=embed, view=EntryStartView())
+        
+    finally:
+        # 정상 종료든, 시간 초과든, 오류든 무조건 자물쇠(Lock) 해제
+        entry_locks[gid] = False
+
+
+class EntryStartView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None) # 시간 제한 없는 무한 유지 버튼
+        
+    @discord.ui.button(label="🚀 내전 입장 (등록 시작)", style=discord.ButtonStyle.success, custom_id="btn_entry_start")
+    async def start_entry_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        gid = str(interaction.guild_id)
+        uid = str(interaction.user.id)
+        
+        # 1. 자물쇠(Lock) 검사: 누가 이미 진행 중이면 차단
+        if entry_locks.get(gid, False):
+            return await interaction.response.send_message("⏳ 현재 다른 유저가 입장 절차를 진행하고 있습니다. 앞사람이 끝날 때까지 잠시만 기다려주세요!", ephemeral=True)
+        
+        # 2. 이미 등록된 유저인지 검사
+        data = get_user_data(gid, uid)
+        if data and (data.get('main_pos', '-') != '-' or data.get('battletag', '-') != '-'):
+            return await interaction.response.send_message("❌ 이미 내전 등록을 완료하셨습니다!\n(정보를 수정하시려면 `!정보수정` 명령어를 이용해주세요.)", ephemeral=True)
+        
+        # 3. 통과 시 자물쇠 잠그고 진행 시작
+        entry_locks[gid] = True
+        await run_ephemeral_entry_flow(interaction)
+
+@bot.command(name='입장채널세팅')
+async def setup_entry_channel(ctx):
+    if not is_admin(ctx): return
+    await ctx.message.delete()
+    await ctx.send("👇 **아래 버튼을 눌러 내전 입장(등록) 절차를 시작하세요!**", view=EntryStartView())
+
+@bot.command(name='입장')
+async def handle_legacy_entry_cmd(ctx):
+    # 유저가 습관적으로 !입장을 치면 즉시 삭제하고 안내 메시지 임시 출력
+    try: await ctx.message.delete()
+    except: pass
+    msg = await ctx.send(f"{ctx.author.mention}, 채팅 명령어 대신 채널에 있는 **[🚀 내전 입장]** 버튼을 클릭해서 등록을 진행해주세요!", delete_after=5)
 
 # 💡 [복구완료] 개발자 더미 유저 테스트 기능
 class DummyUser:
