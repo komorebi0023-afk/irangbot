@@ -65,10 +65,34 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS active_match (
                     guild_id TEXT PRIMARY KEY, match_data TEXT
                  )''')
+    # 💡 [신규] 역할 저장 테이블 추가
+    c.execute('''CREATE TABLE IF NOT EXISTS server_roles (
+                    guild_id TEXT, role_key TEXT, role_id TEXT,
+                    PRIMARY KEY (guild_id, role_key)
+                 )''')
     conn.commit()
     conn.close()
 
 init_db()
+
+# 💡 역할 DB 헬퍼 함수 추가
+def set_role_id(guild_id, role_key, role_id):
+    conn = sqlite3.connect('database.db')
+    c = conn.cursor()
+    if role_id is None:
+        c.execute("DELETE FROM server_roles WHERE guild_id=? AND role_key=?", (str(guild_id), role_key))
+    else:
+        c.execute("REPLACE INTO server_roles (guild_id, role_key, role_id) VALUES (?, ?, ?)", (str(guild_id), role_key, str(role_id)))
+    conn.commit()
+    conn.close()
+
+def get_role_id(guild_id, role_key):
+    conn = sqlite3.connect('database.db')
+    c = conn.cursor()
+    c.execute("SELECT role_id FROM server_roles WHERE guild_id=? AND role_key=?", (str(guild_id), role_key))
+    res = c.fetchone()
+    conn.close()
+    return int(res[0]) if res else None
 
 def get_server_config(guild_id):
     conn = sqlite3.connect('database.db')
@@ -397,6 +421,50 @@ class HeroSelectView(discord.ui.View):
         self.stop()
 
 # --- 통합 흐름 제어 함수 ---
+async def auto_sync_user_roles(guild_id, member, db_data, is_first_entry=False):
+    gid = str(guild_id)
+    guild = member.guild
+    
+    # 1. 부여해야 할 새로운 역할 파악
+    target_role_ids = []
+    
+    # 입장 시 1회성 발동
+    if is_first_entry:
+        entry_give = get_role_id(gid, "entry_give")
+        if entry_give: target_role_ids.append(entry_give)
+        entry_take = get_role_id(gid, "entry_take")
+        if entry_take and guild.get_role(entry_take) in member.roles:
+            try: await member.remove_roles(guild.get_role(entry_take))
+            except: pass
+
+    # 주 포지션, 보조 포지션, 현재 티어 역할 파악
+    m_pos_id = get_role_id(gid, f"pos_{db_data.get('main_pos', '-')}")
+    s_pos_id = get_role_id(gid, f"pos_{db_data.get('sub_pos', '-')}")
+    tier_id = get_role_id(gid, f"tier_{db_data.get('current_tier', '-')}")
+    
+    # 2. 기존의 모든 포지션/티어 역할 중 빼앗아야 할 것 회수
+    conn = sqlite3.connect('database.db')
+    c = conn.cursor()
+    c.execute("SELECT role_id FROM server_roles WHERE guild_id=? AND (role_key LIKE 'pos_%' OR role_key LIKE 'tier_%')", (gid,))
+    all_mapped_roles = [int(row[0]) for row in c.fetchall()]
+    conn.close()
+
+    roles_to_remove = [guild.get_role(r) for r in all_mapped_roles if r in [mr.id for mr in member.roles] and r not in [m_pos_id, s_pos_id, tier_id]]
+    roles_to_remove = [r for r in roles_to_remove if r is not None]
+    
+    if roles_to_remove:
+        try: await member.remove_roles(*roles_to_remove)
+        except: pass
+
+    # 3. 새로운 역할 순차 부여 (주 포지션 우선)
+    try:
+        if m_pos_id and guild.get_role(m_pos_id): await member.add_roles(guild.get_role(m_pos_id))
+        if s_pos_id and s_pos_id != m_pos_id and guild.get_role(s_pos_id): await member.add_roles(guild.get_role(s_pos_id))
+        if tier_id and guild.get_role(tier_id): await member.add_roles(guild.get_role(tier_id))
+        # 입장 부여 역할
+        if is_first_entry and entry_give and guild.get_role(entry_give): await member.add_roles(guild.get_role(entry_give))
+    except: pass
+
 async def run_user_setup_flow(ctx, target_member, fields, is_admin):
     gid, uid = str(ctx.guild.id), str(target_member.id)
     db_data = get_user_data(gid, uid)
@@ -471,7 +539,8 @@ async def run_user_setup_flow(ctx, target_member, fields, is_admin):
         nick_msg = ""
 
     await status_msg.edit(content=f"🎉 **[{target_member.display_name}]** 님의 데이터 설정이 완벽하게 끝났습니다!{nick_msg}")
-
+    is_first_entry = ('all' in fields and not is_admin)
+    await auto_sync_user_roles(gid, target_member, db_data, is_first_entry)
 
 class EditTargetSelect(discord.ui.Select):
     # 💡 수정된 부분 1: __init__에 ctx를 받을 수 있도록 추가했습니다.
@@ -1529,6 +1598,56 @@ async def start_civil_war(ctx):
     mems = [m for m in lobby.members if not m.bot]
     if len(mems) < 2: return await ctx.send("❌ 대기실 인원 부족!")
     await ctx.send(f"📋 대기실 인원: {len(mems)}명", view=ExcludeSelectView(mems))
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🔧 역할 설정 자동화 시스템 UI
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+class SingleRoleSelect(discord.ui.RoleSelect):
+    def __init__(self, key, placeholder):
+        super().__init__(placeholder=placeholder, min_values=0, max_values=1)
+        self.key = key
+    async def callback(self, interaction: discord.Interaction):
+        if not self.values:
+            set_role_id(interaction.guild_id, self.key, None)
+            await interaction.response.send_message(f"✅ `{self.placeholder}` 설정이 **해제(선택 안 함)** 되었습니다.", ephemeral=True)
+        else:
+            role = self.values[0]
+            set_role_id(interaction.guild_id, self.key, role.id)
+            await interaction.response.send_message(f"✅ `{self.placeholder}`이(가) **@{role.name}** (으)로 매핑되었습니다.", ephemeral=True)
+
+class RoleSetupView(discord.ui.View):
+    def __init__(self, category):
+        super().__init__(timeout=None)
+        keys = []
+        if "입장" in category:
+            keys = [("entry_give", "입장 완료 시 자동 부여 역할"), ("entry_take", "입장 완료 시 자동 제거 역할")]
+        elif "포지션" in category:
+            keys = [(f"pos_{x}", f"{x} 포지션 역할") for x in ["돌격", "공격", "지원", "자유"]]
+        elif "하위" in category:
+            keys = [(f"tier_{x}", f"{x} 티어 역할") for x in ["언랭", "브론즈", "실버", "골드", "플래티넘"]]
+        elif "상위" in category:
+            keys = [(f"tier_{x}", f"{x} 티어 역할") for x in ["다이아몬드", "마스터", "그랜드마스터", "챔피언"]]
+        
+        for k, p in keys: self.add_item(SingleRoleSelect(k, p))
+
+class RoleCategorySelect(discord.ui.Select):
+    def __init__(self):
+        opts = [
+            discord.SelectOption(label="1. 입장 심사 역할", description="!입장 시 부여/제거할 역할"),
+            discord.SelectOption(label="2. 포지션 역할", description="돌격, 공격, 지원, 자유"),
+            discord.SelectOption(label="3. 하위 티어 역할", description="언랭 ~ 플래티넘"),
+            discord.SelectOption(label="4. 상위 티어 역할", description="다이아몬드 ~ 챔피언")
+        ]
+        super().__init__(placeholder="매핑할 역할 카테고리를 선택하세요...", options=opts)
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(content=f"⚙️ **{self.values[0]}** 매핑 패널\n*(역할을 선택하지 않고 메뉴를 닫으면 '설정 해제' 됩니다)*", view=RoleSetupView(self.values[0]))
+
+@bot.command(name='역할설정')
+async def setup_roles(ctx):
+    if not is_admin(ctx): return await ctx.send("❌ 관리자 전용 명령어입니다.")
+    view = discord.ui.View()
+    view.add_item(RoleCategorySelect())
+    await ctx.send("🛠️ 봇이 자동으로 동기화할 역할을 지정합니다. 카테고리를 골라주세요.", view=view)
 
 # 💡 [복구완료] 개발자 더미 유저 테스트 기능
 class DummyUser:
