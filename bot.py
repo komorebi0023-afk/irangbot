@@ -1602,52 +1602,57 @@ async def start_civil_war(ctx):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🔧 역할 설정 자동화 시스템 UI
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-class SingleRoleSelect(discord.ui.RoleSelect):
-    def __init__(self, key, placeholder):
-        super().__init__(placeholder=placeholder, min_values=0, max_values=1)
-        self.key = key
-    async def callback(self, interaction: discord.Interaction):
-        if not self.values:
-            set_role_id(interaction.guild_id, self.key, None)
-            await interaction.response.send_message(f"✅ `{self.placeholder}` 설정이 **해제(선택 안 함)** 되었습니다.", ephemeral=True)
-        else:
-            role = self.values[0]
-            set_role_id(interaction.guild_id, self.key, role.id)
-            await interaction.response.send_message(f"✅ `{self.placeholder}`이(가) **@{role.name}** (으)로 매핑되었습니다.", ephemeral=True)
 
-class RoleSetupView(discord.ui.View):
-    def __init__(self, category):
-        super().__init__(timeout=None)
-        keys = []
-        if "입장" in category:
-            keys = [("entry_give", "입장 완료 시 자동 부여 역할"), ("entry_take", "입장 완료 시 자동 제거 역할")]
-        elif "포지션" in category:
-            keys = [(f"pos_{x}", f"{x} 포지션 역할") for x in ["돌격", "공격", "지원", "자유"]]
-        elif "하위" in category:
-            keys = [(f"tier_{x}", f"{x} 티어 역할") for x in ["언랭", "브론즈", "실버", "골드", "플래티넘"]]
-        elif "상위" in category:
-            keys = [(f"tier_{x}", f"{x} 티어 역할") for x in ["다이아몬드", "마스터", "그랜드마스터", "챔피언"]]
-        
-        for k, p in keys: self.add_item(SingleRoleSelect(k, p))
-
-class RoleCategorySelect(discord.ui.Select):
-    def __init__(self):
-        opts = [
-            discord.SelectOption(label="1. 입장 심사 역할", description="!입장 시 부여/제거할 역할"),
-            discord.SelectOption(label="2. 포지션 역할", description="돌격, 공격, 지원, 자유"),
-            discord.SelectOption(label="3. 하위 티어 역할", description="언랭 ~ 플래티넘"),
-            discord.SelectOption(label="4. 상위 티어 역할", description="다이아몬드 ~ 챔피언")
-        ]
-        super().__init__(placeholder="매핑할 역할 카테고리를 선택하세요...", options=opts)
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.response.edit_message(content=f"⚙️ **{self.values[0]}** 매핑 패널\n*(역할을 선택하지 않고 메뉴를 닫으면 '설정 해제' 됩니다)*", view=RoleSetupView(self.values[0]))
-
-@bot.command(name='역할설정')
-async def setup_roles(ctx):
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🔧 역할 설정 명령어 (채팅 입력 방식)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+@bot.command(name='입장부여설정')
+async def set_entry_give(ctx, role: discord.Role = None):
     if not is_admin(ctx): return await ctx.send("❌ 관리자 전용 명령어입니다.")
-    view = discord.ui.View()
-    view.add_item(RoleCategorySelect())
-    await ctx.send("🛠️ 봇이 자동으로 동기화할 역할을 지정합니다. 카테고리를 골라주세요.", view=view)
+    if role:
+        set_role_id(ctx.guild.id, "entry_give", role.id)
+        await ctx.send(f"✅ 입장 완료 시 부여할 역할이 {role.mention} (으)로 설정되었습니다.")
+    else:
+        set_role_id(ctx.guild.id, "entry_give", None)
+        await ctx.send("✅ 입장 부여 역할 설정이 해제되었습니다.")
+
+@bot.command(name='입장제거설정')
+async def set_entry_take(ctx, role: discord.Role = None):
+    if not is_admin(ctx): return await ctx.send("❌ 관리자 전용 명령어입니다.")
+    if role:
+        set_role_id(ctx.guild.id, "entry_take", role.id)
+        await ctx.send(f"✅ 입장 완료 시 제거할 역할이 {role.mention} (으)로 설정되었습니다.")
+    else:
+        set_role_id(ctx.guild.id, "entry_take", None)
+        await ctx.send("✅ 입장 제거 역할 설정이 해제되었습니다.")
+
+@bot.command(name='포지션설정')
+async def set_pos_role(ctx, pos_name: str, role: discord.Role = None):
+    if not is_admin(ctx): return await ctx.send("❌ 관리자 전용 명령어입니다.")
+    valid_pos = ["돌격", "공격", "지원", "자유"]
+    if pos_name not in valid_pos:
+        return await ctx.send(f"❌ 포지션 이름은 다음 중 하나여야 합니다: `{', '.join(valid_pos)}`\n(사용법: `!포지션설정 돌격 @역할`)")
+    
+    if role:
+        set_role_id(ctx.guild.id, f"pos_{pos_name}", role.id)
+        await ctx.send(f"✅ **{pos_name}** 포지션 역할이 {role.mention} (으)로 설정되었습니다.")
+    else:
+        set_role_id(ctx.guild.id, f"pos_{pos_name}", None)
+        await ctx.send(f"✅ **{pos_name}** 포지션 역할 설정이 해제되었습니다.")
+
+@bot.command(name='티어설정')
+async def set_tier_role(ctx, tier_name: str, role: discord.Role = None):
+    if not is_admin(ctx): return await ctx.send("❌ 관리자 전용 명령어입니다.")
+    valid_tiers = ["언랭", "브론즈", "실버", "골드", "플래티넘", "다이아몬드", "마스터", "그랜드마스터", "챔피언"]
+    if tier_name not in valid_tiers:
+        return await ctx.send(f"❌ 티어 이름은 다음 중 하나여야 합니다:\n`{', '.join(valid_tiers)}`\n(사용법: `!티어설정 골드 @역할`)")
+    
+    if role:
+        set_role_id(ctx.guild.id, f"tier_{tier_name}", role.id)
+        await ctx.send(f"✅ **{tier_name}** 티어 역할이 {role.mention} (으)로 설정되었습니다.")
+    else:
+        set_role_id(ctx.guild.id, f"tier_{tier_name}", None)
+        await ctx.send(f"✅ **{tier_name}** 티어 역할 설정이 해제되었습니다.")
 
 # 💡 [복구완료] 개발자 더미 유저 테스트 기능
 class DummyUser:
