@@ -507,6 +507,11 @@ async def manage_user(ctx, member: discord.Member = None):
 
 @bot.command(name='입장')
 async def self_register(ctx):
+    # 💡 이미 등록된 유저인지 확인 (포지션이나 배틀태그가 등록되어 있으면 차단)
+    data = get_user_data(str(ctx.guild.id), str(ctx.author.id))
+    if data and (data.get('main_pos', '-') != '-' or data.get('battletag', '-') != '-'):
+        return await ctx.send(f"❌ **{ctx.author.display_name}** 님은 이미 내전 등록을 완료하셨습니다!\n(정보 수정이 필요하다면 `!정보수정` 명령어를 사용해주세요.)")
+        
     # 유저 자율 초기 등록 (점수 제외 all)
     await ctx.send(f"👋 환영합니다, **{ctx.author.display_name}**님! 내전 등록 절차를 시작합니다.")
     await run_user_setup_flow(ctx, ctx.author, ['all'], is_admin=False)
@@ -686,21 +691,37 @@ async def check_profile(ctx, member: discord.Member = None):
     target = member or ctx.author
     data = get_user_data(str(ctx.guild.id), str(target.id))
     
-    # 💡 !입장을 마쳤는지 확인 (포지션이나 배틀태그가 기본값 '-' 인지 체크)
+    # !입장을 마쳤는지 확인
     if not data or (data.get('main_pos', '-') == '-' and data.get('battletag', '-') == '-'):
         return await ctx.send(f"❌ **{target.display_name}** 님은 아직 `!입장` 등록을 완료하지 않으셨습니다.")
     
-    # 💡 점수가 0점이면 '미정'으로 표시
+    # 점수가 0점이면 '미정'으로 표시
     score_val = data.get('score', 0)
     display_score = "미정" if score_val == 0 else f"{score_val:g} 점"
     
+    # 💡 승률 계산 로직
+    w_match = re.search(r'\d+', str(data.get('wins', '0')))
+    l_match = re.search(r'\d+', str(data.get('losses', '0')))
+    w = int(w_match.group()) if w_match else 0
+    l = int(l_match.group()) if l_match else 0
+    total = w + l
+    win_rate = (w / total * 100) if total > 0 else 0.0
+    
     embed = discord.Embed(title=f"📋 {target.display_name} 프로필", color=discord.Color.blue())
+    
+    # 상단: 점수 및 포인트
     embed.add_field(name="🎯 내전 점수", value=f"**{display_score}**", inline=True)
     embed.add_field(name="💰 포인트", value=f"**{data.get('points', 0):,} P**", inline=True)
-    embed.add_field(name="닉네임", value=data.get('nickname', '-'), inline=False)
-    embed.add_field(name="주 영웅", value=data.get('main_hero', '-'), inline=True)
-    embed.add_field(name="🏆 누적 전적", value=f"{data.get('losses', '-')} (승: {data.get('wins', '-')})", inline=False)
-    embed.add_field(name="포지션", value=f"{data.get('main_pos', '-')} / {data.get('sub_pos', '-')}", inline=True)
+    
+    # 중단: 배틀태그, 티어, 포지션
+    embed.add_field(name="배틀태그", value=data.get('battletag', '-'), inline=False)
+    embed.add_field(name="티어 (최고 / 현재)", value=f"{data.get('max_tier', '-')} / {data.get('current_tier', '-')}", inline=True)
+    embed.add_field(name="포지션 (주 / 부)", value=f"{data.get('main_pos', '-')} / {data.get('sub_pos', '-')}", inline=True)
+    
+    # 하단: 주 영웅, 전적 및 승률 추가
+    embed.add_field(name="주 영웅", value=data.get('main_hero', '-'), inline=False)
+    embed.add_field(name="🏆 누적 전적", value=f"{w}승 {l}패 **(승률 {win_rate:.1f}%)**", inline=False)
+    
     embed.set_thumbnail(url=target.display_avatar.url)
     
     await ctx.send(embed=embed)
