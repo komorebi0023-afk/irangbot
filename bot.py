@@ -460,7 +460,9 @@ async def run_user_setup_flow(ctx, target_member, fields, is_admin):
 
 
 class EditTargetSelect(discord.ui.Select):
-    def __init__(self, target_member, is_admin):
+    # 💡 수정된 부분 1: __init__에 ctx를 받을 수 있도록 추가했습니다.
+    def __init__(self, ctx, target_member, is_admin):
+        self.ctx = ctx
         self.target_member = target_member
         self.is_admin = is_admin
         opts = [
@@ -476,7 +478,8 @@ class EditTargetSelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.edit_message(content="🔄 선택하신 항목의 수정을 시작합니다...", view=None)
-        await run_user_setup_flow(interaction.message, self.target_member, self.values, self.is_admin)
+        # 💡 수정된 부분 2: interaction.message 대신 self.ctx를 넘겨줍니다.
+        await run_user_setup_flow(self.ctx, self.target_member, self.values, self.is_admin)
 
 @bot.command(name='유저관리')
 async def manage_user(ctx, member: discord.Member = None):
@@ -484,7 +487,8 @@ async def manage_user(ctx, member: discord.Member = None):
     if not member: return await ctx.send("❌ 사용법: `!유저관리 @유저명`")
     
     view = discord.ui.View()
-    view.add_item(EditTargetSelect(member, is_admin=True))
+    # 💡 수정된 부분 3: EditTargetSelect에 ctx를 전달합니다.
+    view.add_item(EditTargetSelect(ctx, member, is_admin=True))
     await ctx.send(f"🛠️ **[{member.display_name}]** 유저 관리 패널입니다. 수정할 항목을 선택하세요.", view=view)
 
 @bot.command(name='입장')
@@ -496,7 +500,8 @@ async def self_register(ctx):
 @bot.command(name='정보수정')
 async def self_update(ctx):
     view = discord.ui.View()
-    view.add_item(EditTargetSelect(ctx.author, is_admin=False))
+    # 💡 수정된 부분 4: EditTargetSelect에 ctx를 전달합니다.
+    view.add_item(EditTargetSelect(ctx, ctx.author, is_admin=False))
     await ctx.send(f"🔧 **[{ctx.author.display_name}]** 님의 정보 수정 패널입니다. 수정할 항목을 선택하세요.", view=view)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
