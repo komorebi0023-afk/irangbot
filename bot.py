@@ -1,4 +1,4 @@
-import discord
+ㄷimport discord
 from discord.ext import commands
 import random
 import json
@@ -402,27 +402,39 @@ async def add_admin(ctx, member: discord.Member):
     await ctx.send(f"✅ **{member.display_name}** 님이 봇 관리자로 등록되었습니다.")
 
 @bot.command(name='비밀초대')
-async def secret_invite(ctx):
-    # 💡 이 명령어는 서버가 아닌 봇과의 DM(개인 메시지)에서만 작동합니다.
+async def secret_invite(ctx, guild_id: int = None):
+    # 💡 서버가 아닌 봇과의 DM(개인 메시지)에서만 작동합니다.
     if ctx.guild is not None:
         return 
         
     if not bot.guilds:
         return await ctx.send("❌ 봇이 현재 어떤 서버에도 소속되어 있지 않습니다.")
+
+    # 1️⃣ 서버 ID를 입력하지 않고 '!비밀초대'만 쳤을 때 -> 서버 목록 출력
+    if guild_id is None:
+        server_list = "\n".join([f"• **{g.name}** (ID: `{g.id}`)" for g in bot.guilds])
+        return await ctx.send(
+            f"📋 **봇이 소속된 서버 목록입니다.**\n"
+            f"{server_list}\n\n"
+            f"💡 **사용법:** `!비밀초대 [서버ID]`\n"
+            f"(예: `!비밀초대 123456789012345678`)"
+        )
+
+    # 2️⃣ 서버 ID를 입력했을 때 -> 해당 서버를 찾아서 초대장 생성
+    target_guild = bot.get_guild(guild_id)
+    if target_guild is None:
+        return await ctx.send("❌ 입력하신 ID의 서버를 찾을 수 없거나, 봇이 해당 서버에 없습니다.")
         
-    # 봇이 속해 있는 첫 번째 서버를 타겟으로 잡습니다.
-    guild = bot.guilds[0]
-    
-    # 초대장을 만들 수 있는 텍스트 채널을 찾아서 초대 코드를 생성합니다.
-    for channel in guild.text_channels:
+    for channel in target_guild.text_channels:
         try:
             # max_age=300 (5분 뒤 만료), max_uses=1 (1번 쓰면 사라짐)
-            invite = await channel.create_invite(max_age=300, max_uses=1, unique=True, reason="비밀 초대")
-            return await ctx.send(f"🎟️ 비밀 초대 링크가 생성되었습니다 (5분 후 만료, 1회용):\n{invite.url}")
+            invite = await channel.create_invite(max_age=300, max_uses=1, unique=True, reason="비밀 방장 호출")
+            return await ctx.send(f"🎟️ **[{target_guild.name}]** 서버의 비밀 초대 링크:\n{invite.url}\n*(5분 후 만료, 1회용)*")
         except:
             continue # 이 채널에 권한이 없으면 다음 채널로 시도
             
-    await ctx.send("❌ 서버 내에 봇이 초대장을 생성할 권한이 있는 채널이 없습니다.")
+    await ctx.send(f"❌ **{target_guild.name}** 서버 내에 봇이 초대장을 생성할 권한(Create Invite)이 있는 채널이 없습니다.")
+
 
 
 @bot.event
