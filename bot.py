@@ -1989,14 +1989,15 @@ async def reset_stats(ctx, target: str = None):
     gid = str(ctx.guild.id)
     
     if target == "전체":
-        status_msg = await ctx.send("⏳ **전체 전적 초기화를 시작합니다. 시트 동기화가 완료될 때까지 잠시만 기다려주세요...**\n*(인원이 많을 경우 구글 API 제한 방지를 위해 약간의 시간이 소요됩니다)*")
+        status_msg = await ctx.send("⏳ **전적 시트 초기화를 시작합니다...**")
         
-        # 1. DB 초기화 (포인트는 냅두고 score, wins, losses만 0으로 리셋)
-        c.execute("UPDATE user_stats SET score=0.0, wins='0', losses='0' WHERE guild_id=?", (gid,))
+        # 1. DB 초기화 (내전점수 score, 재화 points는 절대 유지 / wins, losses만 0으로 리셋)
+        c.execute("UPDATE user_stats SET wins='0', losses='0' WHERE guild_id=?", (gid,))
+        # 매치 영수증도 삭제
         c.execute("DELETE FROM match_history WHERE guild_id=?", (gid,))
         conn.commit()
         
-        # 2. 구글 시트 연동 (전적 시트 내용 삭제 + 메인 시트 수치 0으로 업데이트)
+        # 2. 구글 시트 연동 (전적 시트 2행부터 통째로 삭제)
         cfg = get_server_config(gid)
         if cfg and cfg.get("sheet_key"):
             try:
@@ -2011,38 +2012,24 @@ async def reset_stats(ctx, target: str = None):
                         record_sheet.delete_rows(2, len(rows))
                 except Exception as e:
                     print(f"[전적 시트 초기화 실패] {e}")
-
-                # [메인] 시트 유저 데이터 동기화 (전체 유저 대상)
-                c.execute("SELECT user_id FROM user_stats WHERE guild_id=?", (gid,))
-                all_users = c.fetchall()
-                
-                for row in all_users:
-                    uid = row[0]
-                    member = ctx.guild.get_member(int(uid))
-                    if member:
-                        db_data = get_user_data(gid, uid)
-                        # 개별 유저의 0점/0승/0패 데이터를 메인 시트에 반영
-                        await sync_user_to_sheet(gid, member, db_data)
-                        # API Rate Limit(1분에 60회 제한) 방지용 1초 대기
-                        await asyncio.sleep(1)
-                        
+                    
             except Exception as e:
                 print(f"[구글 시트 연동 에러] {e}")
                 
-        await status_msg.edit(content="✅ **서버 내 모든 유저의 전적이 0으로 리셋되었으며, 전적 시트 기록이 깔끔하게 지워졌습니다! (포인트는 유지됨)**")
+        # 💡 Data 시트는 수식으로 자동 연동되므로 봇이 따로 건드리지 않고 조용히 종료!
+        await status_msg.edit(content="✅ **서버 내 모든 유저의 전적이 0으로 리셋되었으며, 구글 '전적' 시트 기록이 깔끔하게 지워졌습니다! (내전점수 및 Data 시트 유지됨)**")
         
     else:
-        # 단일 유저 초기화 로직
+        # 단일 유저 초기화
         if not ctx.message.mentions: return await ctx.send("❌ 대상을 멘션해주세요.")
         target_user = ctx.message.mentions[0]
         uid = str(target_user.id)
         
-        c.execute("UPDATE user_stats SET score=0.0, wins='0', losses='0' WHERE guild_id=? AND user_id=?", (gid, uid))
+        # DB에서만 해당 유저의 승/패 0으로 변경
+        c.execute("UPDATE user_stats SET wins='0', losses='0' WHERE guild_id=? AND user_id=?", (gid, uid))
         conn.commit()
         
-        db_data = get_user_data(gid, uid)
-        await sync_user_to_sheet(gid, target_user, db_data)
-        await ctx.send(f"✅ **{target_user.display_name}** 님의 전적과 점수가 초기화되고 시트에 반영되었습니다.")
+        await ctx.send(f"✅ **{target_user.display_name}** 님의 전적(승/패)이 초기화되었습니다.\n*(단일 유저 초기화의 경우, 전적 시트의 과거 기록 줄은 수동으로 삭제하셔야 완벽히 수식이 맞습니다)*")
         
     conn.close()
 
