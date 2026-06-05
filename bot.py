@@ -57,6 +57,41 @@ def on_roles_snapshot(col_snapshot, changes, read_time):
     conn.commit()
     conn.close()
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 📡 대시보드 실시간 동기화 (우체통) 로직 추가
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def dump_guild_data_to_firestore(guild_id):
+    guild = bot.get_guild(int(guild_id))
+    if not guild: return
+    
+    # 텍스트 채널, 음성 채널, 역할을 각각 수집 (everyone 역할 제외)
+    text_channels = [{"id": str(c.id), "name": c.name} for c in guild.text_channels]
+    voice_channels = [{"id": str(c.id), "name": c.name} for c in guild.voice_channels]
+    roles = [{"id": str(r.id), "name": r.name} for r in guild.roles if not r.is_default()]
+    
+    # Firestore의 서버 문서 내에 리스트 형태로 저장
+    db.collection('servers').document(str(guild_id)).set({
+        'text_channels': text_channels,
+        'voice_channels': voice_channels,
+        'discord_roles': roles,
+        'last_sync': firestore.SERVER_TIMESTAMP
+    }, merge=True)
+    print(f"[{guild.name}] 대시보드용 채널/역할 데이터 덤프 완료!")
+
+def on_dashboard_request_snapshot(col_snapshot, changes, read_time):
+    for change in changes:
+        if change.type.name in ['ADDED', 'MODIFIED']:
+            doc = change.document
+            data = doc.to_dict()
+            guild_id = doc.id
+            
+            # 웹에서 동기화 요청(sync_requested: True)을 보냈을 때 반응
+            if data.get('sync_requested') == True:
+                # 비동기 데이터 수집 함수를 봇 메인 루프에 태워 실행
+                bot.loop.create_task(dump_guild_data_to_firestore(guild_id))
+                # 실행 직후 중복 실행을 막기 위해 요청 플래그를 False로 변경
+                doc.reference.update({'sync_requested': False})
+
 def start_firestore_listener():
     # 서버 기본 설정 변경 감지
     config_ref = db.collection('servers')
@@ -65,6 +100,10 @@ def start_firestore_listener():
     # 하위 컬렉션인 roles 변경 감지
     roles_ref = db.collection_group('roles')
     roles_ref.on_snapshot(on_roles_snapshot)
+
+    # [신규] 대시보드 갱신 요청 감지 리스너
+    requests_ref = db.collection('requests')
+    requests_ref.on_snapshot(on_dashboard_request_snapshot)
 
 listener_thread = threading.Thread(target=start_firestore_listener, daemon=True)
 listener_thread.start()
@@ -2154,6 +2193,19 @@ async def reset_stats(ctx, target: str = None):
         await ctx.send(f"✅ **{target_user.display_name}** 님의 전적(승/패)이 초기화되었습니다.\n*(단일 유저 초기화의 경우, 전적 시트의 과거 기록 줄은 수동으로 삭제하셔야 완벽히 수식이 맞습니다)*")
         
     conn.close()
+
+# 봇이 속한 서버의 채널/역할 정보를 Firestore에 덤프하는 함수
+async def dump_guild_data(guild):
+    # 서버 기본 정보 및 채널 목록 저장
+    channels_data = {
+        'channels': [{'id': str(c.id), 'name': c.name} for c in guild.text_channels],
+        'roles': [{'id': str(r.id), 'name': r.name} for r in guild.roles if r.name != "@everyone"],
+        'updated_at': firestore.SERVER_TIMESTAMP
+    }
+    
+    # servers/{guild_id}/info 문서에 저장
+    db.collection('servers').document(str(guild.id)).collection('info').document('channels_roles').set(channels_data)
+    print(f"[{guild.name}] 서버 정보가 Firestore에 덤프되었습니다.")
 
 # 실행
 token = os.environ.get('BOT_TOKEN')
