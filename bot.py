@@ -1723,13 +1723,55 @@ class PositionTierView(discord.ui.View):
         super().__init__(timeout=120.0)
         self.is_done = False
         self.skipped = False
-        self.result = {}
-        
-        # (기존 포지션 및 티어 Select 메뉴 추가 로직이 이 자리에 들어갑니다)
-        # self.add_item(PositionSelect(...))
-        # self.add_item(TierSelect(...))
+        self.result = {
+            'main_pos': default_data.get('main_pos', '-'),
+            'sub_pos': default_data.get('sub_pos', '-'),
+            'max_tier': default_data.get('max_tier', '-'),
+            'current_tier': default_data.get('current_tier', '-')
+        }
 
-    # 💡 [신규] 오버워치를 안 하는 소통 유저를 위한 건너뛰기 버튼 추가
+        # 1. 주 포지션 선택 드롭다운
+        main_pos_select = discord.ui.Select(placeholder="⚔️ 주 포지션 선택", options=[
+            discord.SelectOption(label="탱커", emoji="🛡️"),
+            discord.SelectOption(label="딜러", emoji="⚔️"),
+            discord.SelectOption(label="힐러", emoji="💉"),
+            discord.SelectOption(label="올라운더", emoji="⭐")
+        ], custom_id="main_pos", row=0)
+        main_pos_select.callback = self.select_callback
+        self.add_item(main_pos_select)
+
+        # 2. 부 포지션 선택 드롭다운
+        sub_pos_select = discord.ui.Select(placeholder="🛡️ 부 포지션 선택", options=[
+            discord.SelectOption(label="탱커", emoji="🛡️"),
+            discord.SelectOption(label="딜러", emoji="⚔️"),
+            discord.SelectOption(label="힐러", emoji="💉"),
+            discord.SelectOption(label="올라운더", emoji="⭐"),
+            discord.SelectOption(label="없음", emoji="❌")
+        ], custom_id="sub_pos", row=1)
+        sub_pos_select.callback = self.select_callback
+        self.add_item(sub_pos_select)
+
+        # 3. 최고 티어 선택 드롭다운
+        max_tier_select = discord.ui.Select(placeholder="🏆 최고 티어 선택", options=[
+            discord.SelectOption(label=t) for t in ["브론즈", "실버", "골드", "플래티넘", "다이아", "마스터", "그랜드마스터", "챔피언", "언랭크"]
+        ], custom_id="max_tier", row=2)
+        max_tier_select.callback = self.select_callback
+        self.add_item(max_tier_select)
+
+        # 4. 현재 티어 선택 드롭다운
+        curr_tier_select = discord.ui.Select(placeholder="🏅 현재 티어 선택", options=[
+            discord.SelectOption(label=t) for t in ["브론즈", "실버", "골드", "플래티넘", "다이아", "마스터", "그랜드마스터", "챔피언", "언랭크"]
+        ], custom_id="current_tier", row=3)
+        curr_tier_select.callback = self.select_callback
+        self.add_item(curr_tier_select)
+
+    # 드롭다운 선택 시 값 저장 함수
+    async def select_callback(self, interaction: discord.Interaction):
+        custom_id = interaction.data["custom_id"]
+        self.result[custom_id] = interaction.data["values"][0]
+        await interaction.response.defer()
+
+    # 💡 [신규] 오버워치를 안 하는 소통 유저를 위한 건너뛰기 버튼 (가장 아랫줄)
     @discord.ui.button(label="🎮 오버워치 안 함 (입장만 하기)", style=discord.ButtonStyle.secondary, custom_id="btn_skip_ow", row=4)
     async def skip_ow_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.result = {
@@ -1742,9 +1784,13 @@ class PositionTierView(discord.ui.View):
         await interaction.response.defer()
         self.stop()
 
+    # 💡 정상적인 오버워치 유저의 다음 단계 진행 버튼
     @discord.ui.button(label="✅ 다음 단계로", style=discord.ButtonStyle.success, custom_id="btn_next_pt", row=4)
     async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # (기존 선택 검증 로직)
+        # 주 포지션과 최고 티어는 필수 선택이므로 안 골랐으면 컷
+        if self.result.get('main_pos', '-') == '-' or self.result.get('max_tier', '-') == '-':
+            return await interaction.response.send_message("⚠️ 주 포지션과 최고 티어는 반드시 선택해야 다음으로 넘어갈 수 있습니다!", ephemeral=True)
+            
         self.is_done = True
         await interaction.response.defer()
         self.stop()
