@@ -10,7 +10,64 @@ import datetime as dt
 import time
 import asyncio
 import re
+import firebase_admin
+from firebase_admin import credentials, firestore
+import threading
+import sqlite3
 
+# 파이어베이스 초기화
+cred = credentials.Certificate('firebase_key.json')
+firebase_admin.initialize_app(cred)
+db = firestore.client()
+
+def on_config_snapshot(col_snapshot, changes, read_time):
+    conn = sqlite3.connect('database.db')
+    c = conn.cursor()
+    for doc in col_snapshot:
+        guild_id = doc.id
+        data = doc.to_dict()
+        c.execute('''INSERT OR REPLACE INTO server_config 
+                     (guild_id, sheet_key, announce_id, lobby_id, t1_id, t2_id, t3_id, t4_id) 
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', 
+                  (guild_id, 
+                   data.get('sheet_key', ''), 
+                   data.get('announce_id', ''), 
+                   data.get('lobby_id', ''), 
+                   data.get('t1_id', ''), 
+                   data.get('t2_id', ''), 
+                   data.get('t3_id', ''), 
+                   data.get('t4_id', '')))
+    conn.commit()
+    conn.close()
+
+def on_roles_snapshot(col_snapshot, changes, read_time):
+    conn = sqlite3.connect('database.db')
+    c = conn.cursor()
+    for doc in col_snapshot:
+        # 문서 경로(예: servers/12345/roles/tier_bronze)를 분석하여 guild_id 추출
+        path_parts = doc.reference.path.split('/')
+        if len(path_parts) >= 3:
+            guild_id = path_parts[1]
+            role_key = doc.id  # 예: '탱커', '브론즈', '기본입장'
+            data = doc.to_dict()
+            role_id = data.get('role_id', '')
+            
+            c.execute('''INSERT OR REPLACE INTO server_roles (guild_id, role_key, role_id) 
+                         VALUES (?, ?, ?)''', (guild_id, role_key, str(role_id)))
+    conn.commit()
+    conn.close()
+
+def start_firestore_listener():
+    # 서버 기본 설정 변경 감지
+    config_ref = db.collection('servers')
+    config_ref.on_snapshot(on_config_snapshot)
+    
+    # 하위 컬렉션인 roles 변경 감지
+    roles_ref = db.collection_group('roles')
+    roles_ref.on_snapshot(on_roles_snapshot)
+
+listener_thread = threading.Thread(target=start_firestore_listener, daemon=True)
+listener_thread.start()
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🤖 봇 초기 세팅 및 권한
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
