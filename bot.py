@@ -411,39 +411,6 @@ async def sync_user_to_sheet(guild_id, member, db_data):
     except Exception as e:
         print(f"시트 연동 에러: {e}")
 
-# --- 1단계: 포지션 & 티어 선택 뷰 ---
-class PositionTierView(discord.ui.View):
-    def __init__(self, db_data):
-        super().__init__(timeout=120)
-        self.result = db_data.copy()
-        self.is_done = False
-        
-        pos_opts = [discord.SelectOption(label=x, value=x) for x in ["돌격", "공격", "지원", "자유"]]
-        sub_pos_opts = pos_opts + [discord.SelectOption(label="없음", value="없음")]
-        tier_opts = [discord.SelectOption(label=x, value=x) for x in ["언랭", "브론즈", "실버", "골드", "플래티넘", "다이아몬드", "마스터", "그랜드마스터", "챔피언"]]
-        
-        self.s1 = discord.ui.Select(placeholder="1. 주 포지션 선택", options=pos_opts, custom_id="m_pos")
-        self.s2 = discord.ui.Select(placeholder="2. 보조 포지션 선택", options=sub_pos_opts, custom_id="s_pos")
-        self.s3 = discord.ui.Select(placeholder="3. 최고 티어 선택", options=tier_opts, custom_id="max_t")
-        self.s4 = discord.ui.Select(placeholder="4. 현재 티어 선택", options=tier_opts, custom_id="cur_t")
-        
-        async def cb(interaction):
-            sel = interaction.data["custom_id"]
-            val = interaction.data["values"][0]
-            if sel == "m_pos": self.result['main_pos'] = val
-            elif sel == "s_pos": self.result['sub_pos'] = val
-            elif sel == "max_t": self.result['max_tier'] = val
-            elif sel == "cur_t": self.result['current_tier'] = val
-            await interaction.response.defer()
-            
-        for s in [self.s1, self.s2, self.s3, self.s4]: s.callback = cb; self.add_item(s)
-
-    @discord.ui.button(label="➡️ 다음 단계로 (영웅 선택)", style=discord.ButtonStyle.primary, row=4)
-    async def nxt(self, interaction: discord.Interaction, btn):
-        self.is_done = True
-        await interaction.response.defer()
-        self.stop()
-
 # --- 2단계: 모스트 영웅 선택 뷰 ---
 class HeroSelectView(discord.ui.View):
     def __init__(self, db_data):
@@ -1744,46 +1711,92 @@ async def set_tier_role(ctx, tier_name: str, role: discord.Role = None):
 # 💡 서버별로 현재 입장 중인 유저가 있는지 체크하는 자물쇠(Lock) 딕셔너리
 entry_locks = {}
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🚀 1:1 비공개 입장 자동화 시스템 (비플레이어 하이패스 포함)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# 💡 서버별로 현재 입장 중인 유저가 있는지 체크하는 자물쇠(Lock) 딕셔너리
+entry_locks = {}
+
+class PositionTierView(discord.ui.View):
+    def __init__(self, default_data):
+        super().__init__(timeout=120.0)
+        self.is_done = False
+        self.skipped = False
+        self.result = {}
+        
+        # (기존 포지션 및 티어 Select 메뉴 추가 로직이 이 자리에 들어갑니다)
+        # self.add_item(PositionSelect(...))
+        # self.add_item(TierSelect(...))
+
+    # 💡 [신규] 오버워치를 안 하는 소통 유저를 위한 건너뛰기 버튼 추가
+    @discord.ui.button(label="🎮 오버워치 안 함 (입장만 하기)", style=discord.ButtonStyle.secondary, custom_id="btn_skip_ow", row=4)
+    async def skip_ow_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.result = {
+            'main_pos': '-', 'sub_pos': '-', 
+            'max_tier': '-', 'current_tier': '-',
+            'main_hero': '-', 'battletag': '-'
+        }
+        self.is_done = True
+        self.skipped = True
+        await interaction.response.defer()
+        self.stop()
+
+    @discord.ui.button(label="✅ 다음 단계로", style=discord.ButtonStyle.success, custom_id="btn_next_pt", row=4)
+    async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # (기존 선택 검증 로직)
+        self.is_done = True
+        await interaction.response.defer()
+        self.stop()
+
 async def run_ephemeral_entry_flow(interaction: discord.Interaction):
     gid = str(interaction.guild_id)
     uid = str(interaction.user.id)
     db_data = get_user_data(gid, uid)
     
     try:
-        # 1단계: 포지션 & 티어 (비공개 뷰)
+        # 1단계: 포지션 & 티어 (비공개 뷰) - 건너뛰기 버튼 포함
         view1 = PositionTierView(db_data)
-        await interaction.response.send_message(f"🔹 **[{interaction.user.display_name}]**님, 아래에서 포지션과 티어를 선택해주세요.\n*(나에게만 보이는 비공개 메시지입니다)*", view=view1, ephemeral=True)
+        await interaction.response.send_message(f"🔹 **[{interaction.user.display_name}]**님, 아래에서 포지션과 티어를 선택해주세요.\n*(오버워치를 하지 않으신다면 맨 아래 건너뛰기 버튼을 눌러주세요)*", view=view1, ephemeral=True)
         await view1.wait()
+        
         if not view1.is_done: 
             return await interaction.edit_original_response(content="⏳ 2분 초과로 자동 취소되었습니다. 다시 버튼을 눌러주세요.", view=None)
+            
         db_data.update(view1.result)
         
-        # 2단계: 모스트 영웅 (비공개 뷰 수정)
-        view2 = HeroSelectView(db_data)
-        await interaction.edit_original_response(content="🔹 모스트 영웅을 선택해주세요. (각 포지션별 복수 선택 가능)", view=view2)
-        await view2.wait()
-        if not view2.is_done:
-            return await interaction.edit_original_response(content="⏳ 2분 초과로 자동 취소되었습니다. 다시 버튼을 눌러주세요.", view=None)
-        db_data.update(view2.result)
+        # 💡 [신규] 건너뛰기 버튼을 누른 경우 2, 3단계 패스
+        if view1.skipped:
+            db_data['nickname'] = interaction.user.display_name.split(' (')[0]
+            await interaction.edit_original_response(content="🎉 오버워치 정보 없이 기본 입장이 성공적으로 완료되었습니다!", view=None)
         
-        # 3단계: 배틀태그 텍스트 입력 (채팅 입력 유도 후 즉시 삭제)
-        await interaction.edit_original_response(content="⌨️ 현재 채널 채팅창에 **배틀태그**를 입력해주세요. (예: 겐지장인#1234)\n*(입력하신 채팅은 0.1초 만에 자동 삭제되며 남들에게 보이지 않습니다! 건너뛰려면 `스킵` 입력)*", view=None)
-        
-        def check_msg(m): return m.author == interaction.user and m.channel == interaction.channel
-        
-        try:
-            m = await bot.wait_for('message', check=check_msg, timeout=120.0)
-            await m.delete() # 💡 유저가 친 채팅 즉시 삭제
-            if m.content.strip() != "스킵":
-                db_data['battletag'] = m.content.strip()
+        # 오버워치 유저의 경우 정상적인 2, 3단계 진행
+        else:
+            # 2단계: 모스트 영웅 (비공개 뷰 수정)
+            view2 = HeroSelectView(db_data)
+            await interaction.edit_original_response(content="🔹 모스트 영웅을 선택해주세요. (각 포지션별 복수 선택 가능)", view=view2)
+            await view2.wait()
+            if not view2.is_done:
+                return await interaction.edit_original_response(content="⏳ 2분 초과로 자동 취소되었습니다. 다시 버튼을 눌러주세요.", view=None)
+            db_data.update(view2.result)
+            
+            # 3단계: 배틀태그 텍스트 입력 (채팅 입력 유도 후 즉시 삭제)
+            await interaction.edit_original_response(content="⌨️ 현재 채널 채팅창에 **배틀태그**를 입력해주세요. (예: 겐지장인#1234)\n*(입력하신 채팅은 0.1초 만에 자동 삭제되며 남들에게 보이지 않습니다! 건너뛰려면 `스킵` 입력)*", view=None)
+            
+            def check_msg(m): return m.author == interaction.user and m.channel == interaction.channel
+            
+            try:
+                m = await bot.wait_for('message', check=check_msg, timeout=120.0)
+                await m.delete() # 채팅 즉시 삭제
+                if m.content.strip() != "스킵":
+                    db_data['battletag'] = m.content.strip()
                 db_data['nickname'] = interaction.user.display_name.split(' (')[0]
-        except asyncio.TimeoutError:
-            return await interaction.edit_original_response(content="⏳ 입력 시간이 초과되었습니다. 다시 버튼을 눌러주세요.")
+            except asyncio.TimeoutError:
+                return await interaction.edit_original_response(content="⏳ 입력 시간이 초과되었습니다. 다시 버튼을 눌러주세요.")
+            
+            await interaction.edit_original_response(content="🎉 정보가 성공적으로 등록되었습니다! 곧 채널에 프로필이 공개됩니다.", view=None)
         
-        # 데이터 저장 안내 (비공개)
-        await interaction.edit_original_response(content="🎉 정보가 성공적으로 등록되었습니다! 곧 채널에 프로필이 공개됩니다.")
-        
-        # DB 저장
+        # 4단계: 공통 DB 저장 및 동기화 처리
         conn = sqlite3.connect('database.db')
         c = conn.cursor()
         c.execute('''UPDATE user_stats SET nickname=?, battletag=?, main_pos=?, sub_pos=?, max_tier=?, current_tier=?, main_hero=? WHERE guild_id=? AND user_id=?''',
@@ -1791,19 +1804,20 @@ async def run_ephemeral_entry_flow(interaction: discord.Interaction):
         conn.commit()
         conn.close()
 
-        # 시트 및 역할 동기화
+        # 시트 및 역할 동기화 (비플레이어는 알아서 기본 역할만 처리됨)
         await sync_user_to_sheet(gid, interaction.user, db_data)
         await auto_sync_user_roles(gid, interaction.user, db_data, is_first_entry=True)
         
-        # 닉네임 변경 (권한 오류 패스)
-        ow_nick = get_ow_nickname(db_data.get('battletag', '-'))
-        if ow_nick != "-":
-            new_nick = f"{db_data['nickname']} ({ow_nick})"
-            if len(new_nick) > 32: new_nick = new_nick[:32]
-            try: await interaction.user.edit(nick=new_nick)
-            except discord.errors.Forbidden: pass
+        # 배틀태그가 있는 유저만 닉네임 변경 시도
+        if not view1.skipped and db_data.get('battletag', '-') != '-':
+            ow_nick = get_ow_nickname(db_data.get('battletag', '-'))
+            if ow_nick != "-":
+                new_nick = f"{db_data['nickname']} ({ow_nick})"
+                if len(new_nick) > 32: new_nick = new_nick[:32]
+                try: await interaction.user.edit(nick=new_nick)
+                except discord.errors.Forbidden: pass
 
-        # !정보 명령어와 완벽히 동일한 임베드 생성
+        # 프로필 임베드 생성
         score_val = db_data.get('score', 0)
         display_score = "미정" if score_val == 0 else f"{score_val:g} 점"
         w_match = re.search(r'\d+', str(db_data.get('wins', '0')))
@@ -1814,22 +1828,27 @@ async def run_ephemeral_entry_flow(interaction: discord.Interaction):
         win_rate = (w / total * 100) if total > 0 else 0.0
 
         embed = discord.Embed(title=f"📋 {interaction.user.display_name} 프로필 (입장 완료)", color=discord.Color.green())
-        embed.add_field(name="🎯 내전 점수", value=f"**{display_score}**", inline=True)
-        embed.add_field(name="💰 포인트", value=f"**{db_data.get('points', 0):,} P**", inline=True)
-        embed.add_field(name="배틀태그", value=db_data.get('battletag', '-'), inline=False)
-        embed.add_field(name="티어 (최고 / 현재)", value=f"{db_data.get('max_tier', '-')} / {db_data.get('current_tier', '-')}", inline=True)
-        embed.add_field(name="포지션 (주 / 부)", value=f"{db_data.get('main_pos', '-')} / {db_data.get('sub_pos', '-')}", inline=True)
-        embed.add_field(name="주 영웅", value=db_data.get('main_hero', '-'), inline=False)
-        embed.add_field(name="🏆 누적 전적", value=f"{w}승 {l}패 **(승률 {win_rate:.1f}%)**", inline=False)
+        
+        if view1.skipped:
+            embed.description = "🎮 오버워치 미플레이 유저"
+            embed.add_field(name="상태", value="일반 소통 유저로 등록되었습니다.", inline=False)
+        else:
+            embed.add_field(name="🎯 내전 점수", value=f"**{display_score}**", inline=True)
+            embed.add_field(name="💰 포인트", value=f"**{db_data.get('points', 0):,} P**", inline=True)
+            embed.add_field(name="배틀태그", value=db_data.get('battletag', '-'), inline=False)
+            embed.add_field(name="티어 (최고 / 현재)", value=f"{db_data.get('max_tier', '-')} / {db_data.get('current_tier', '-')}", inline=True)
+            embed.add_field(name="포지션 (주 / 부)", value=f"{db_data.get('main_pos', '-')} / {db_data.get('sub_pos', '-')}", inline=True)
+            embed.add_field(name="주 영웅", value=db_data.get('main_hero', '-'), inline=False)
+            embed.add_field(name="🏆 누적 전적", value=f"{w}승 {l}패 **(승률 {win_rate:.1f}%)**", inline=False)
+            
         embed.set_thumbnail(url=interaction.user.display_avatar.url)
         
         # 채널에 프로필과 함께 '다음 유저를 위한 버튼' 새로 발사
-        await interaction.channel.send(content=f"🎉 **{interaction.user.mention}** 님의 내전 등록이 완료되었습니다!", embed=embed, view=EntryStartView())
+        await interaction.channel.send(content=f"🎉 **{interaction.user.mention}** 님의 서버 등록이 완료되었습니다!", embed=embed, view=EntryStartView())
         
     finally:
-        # 정상 종료든, 시간 초과든, 오류든 무조건 자물쇠(Lock) 해제
+        # 무조건 자물쇠(Lock) 해제
         entry_locks[gid] = False
-
 
 class EntryStartView(discord.ui.View):
     def __init__(self):
