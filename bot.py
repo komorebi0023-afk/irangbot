@@ -1824,17 +1824,10 @@ class PositionTierView(discord.ui.View):
 
         # 1. 주 포지션 선택 드롭다운
         main_pos_select = discord.ui.Select(placeholder="⚔️ 주 포지션 선택", options=[
-<<<<<<< HEAD
-            discord.SelectOption(label="돌격", emoji="🛡️"),
-            discord.SelectOption(label="공격", emoji="⚔️"),
-            discord.SelectOption(label="지원", emoji="💉"),
-            discord.SelectOption(label="자유", emoji="⭐")
-=======
             discord.SelectOption(label="탱커", emoji="🛡️"),
             discord.SelectOption(label="딜러", emoji="⚔️"),
             discord.SelectOption(label="힐러", emoji="💉"),
             discord.SelectOption(label="올라운더", emoji="⭐")
->>>>>>> parent of 43cd387 (Update bot.py)
         ], custom_id="main_pos", row=0)
         main_pos_select.callback = self.select_callback
         self.add_item(main_pos_select)
