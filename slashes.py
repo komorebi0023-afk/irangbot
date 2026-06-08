@@ -119,7 +119,7 @@ class GameCommands(commands.Cog):
         update_user_stats(guild_id, user_id, data)
         await interaction.followup.send(f"🎉 출석 체크 완료! 랜덤으로 **{reward}P**를 획득했습니다.")
 
-    @app_commands.command(name="구제", 파라미터="잔액이 100P 이하일 때 하루 1번 300P를 지원받습니다.")
+    @app_commands.command(name="구제", description="잔액이 100P 이하일 때 하루 1번 300P를 지원받습니다.")
     async def relief_fund(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=False)
         guild_id, user_id = interaction.guild.id, interaction.user.id
