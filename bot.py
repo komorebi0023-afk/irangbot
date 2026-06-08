@@ -2200,7 +2200,7 @@ async def reset_stats(ctx, target: str = None):
         await ctx.send(f"✅ **{target_user.display_name}** 님의 전적(승/패)이 초기화되었습니다.\n*(단일 유저 초기화의 경우, 전적 시트의 과거 기록 줄은 수동으로 삭제하셔야 완벽히 수식이 맞습니다)*")
         
     conn.close()
- 
+
 # 봇이 속한 서버의 채널/역할 정보를 Firestore에 덤프하는 함수
 async def dump_guild_data(guild):
     # 서버 기본 정보 및 채널 목록 저장
