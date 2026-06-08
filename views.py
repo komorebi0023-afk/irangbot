@@ -16,7 +16,7 @@ class EntryButtonView(View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="내전 입장 등록", style=discord.style.primary, custom_id="persistent_entry_btn")
+    @discord.ui.button(label="내전 입장 등록", style=discord.ButtonStyle.primary, custom_id="persistent_entry_btn")
     async def entry_button(self, interaction: discord.Interaction, button: Button):
         # 대화형 가입 플로우 시작 (3초 타임아웃 방지 defer 적용)
         await interaction.response.defer(ephemeral=True)
@@ -44,7 +44,7 @@ class PositionTierView(View):
         self.add_item(SubPositionSelect())
         self.add_item(TierSelect())
 
-    @discord.ui.button(label="다음 단계로", style=discord.style.success, row=3)
+    @discord.ui.button(label="다음 단계로", style=discord.ButtonStyle.success, row=3)
     async def next_step(self, interaction: discord.Interaction, button: Button):
         if interaction.user.id != self.target_user.id:
             return await interaction.response.send_message("본인의 등록 절차만 진행할 수 있습니다.", ephemeral=True)
@@ -112,7 +112,7 @@ class HeroSelectView(View):
         self.sub_pos = sub_pos
         self.tier = tier
 
-    @discord.ui.button(label="상세 정보 입력문서 열기", style=discord.style.primary)
+    @discord.ui.button(label="상세 정보 입력문서 열기", style=discord.ButtonStyle.primary)
     async def open_modal(self, interaction: discord.Interaction, button: Button):
         if interaction.user.id != self.target_user.id:
             return await interaction.response.send_message("권한이 없습니다.", ephemeral=True)
@@ -175,11 +175,11 @@ class BettingView(View):
         self.match_id = match_id
         self.bets = {"1팀": {}, "2팀": {}}
 
-    @discord.ui.button(label="1팀 배팅", style=discord.style.danger, custom_id="bet_team1")
+    @discord.ui.button(label="1팀 배팅", style=discord.ButtonStyle.danger, custom_id="bet_team1")
     async def bet_team1(self, interaction: discord.Interaction, button: Button):
         await interaction.response.send_modal(BetModal(self, "1팀"))
 
-    @discord.ui.button(label="2팀 배팅", style=discord.style.blurple, custom_id="bet_team2")
+    @discord.ui.button(label="2팀 배팅", style=discord.ButtonStyle.blurple, custom_id="bet_team2")
     async def bet_team2(self, interaction: discord.Interaction, button: Button):
         await interaction.response.send_modal(BetModal(self, "2팀"))
 
@@ -251,11 +251,11 @@ class AdminControlPanel(View):
         self.match_id = match_id
         self.betting_view = betting_view
 
-    @discord.ui.button(label="1팀 승리 정산", style=discord.style.danger, custom_id="admin_win_t1")
+    @discord.ui.button(label="1팀 승리 정산", style=discord.ButtonStyle.danger, custom_id="admin_win_t1")
     async def team1_win(self, interaction: discord.Interaction, button: Button):
         await self.settle_match(interaction, "1팀")
 
-    @discord.ui.button(label="2팀 승리 정산", style=discord.style.blurple, custom_id="admin_win_t2")
+    @discord.ui.button(label="2팀 승리 정산", style=discord.ButtonStyle.blurple, custom_id="admin_win_t2")
     async def team2_win(self, interaction: discord.Interaction, button: Button):
         await self.settle_match(interaction, "2팀")
 
