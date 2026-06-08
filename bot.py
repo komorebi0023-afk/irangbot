@@ -1830,7 +1830,7 @@ class PositionTierView(discord.ui.View):
         }
 
         # 1. 주 포지션 선택 드롭다운
-       main_pos_select = discord.ui.Select(placeholder="⚔️ 주 포지션 선택", options=[
+        main_pos_select = discord.ui.Select(placeholder="⚔️ 주 포지션 선택", options=[
             discord.SelectOption(label="돌격", emoji="🛡️"),
             discord.SelectOption(label="공격", emoji="⚔️"),
             discord.SelectOption(label="지원", emoji="💉"),
