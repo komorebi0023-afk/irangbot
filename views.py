@@ -316,7 +316,8 @@ async def run_setup_flow(
             embed = build_profile_embed(target_member, db_data, "입장 완료" if is_first_entry else "프로필 업데이트")
             await interaction.channel.send(
                 content=f"🎉 **{target_member.mention}** 님의 등록이 완료되었습니다!",
-                embed=embed
+                embed=embed,
+                view=EntryButtonView() if is_first_entry else None
             )
             return
 
@@ -335,8 +336,8 @@ async def run_setup_flow(
     # ── 3단계: 배틀태그 채팅 입력 ────────────────────
     if mode in ["all", "battletag"]:
         await update_msg(
-            "⌨️ 현재 채널 채팅창에 **배틀태그**를 입력해주세요. (예: 겐지장인#1234)\n"
-            "*(입력하신 채팅은 자동 삭제됩니다! 모르거나 건너뛰려면 `스킵` 입력)*",
+            "⌨️ 현재 채널 채팅창에 **배틀태그**를 입력해주세요.\n"
+            "모르거나 건너뛰려면 `스킵` 입력",
             view=None
         )
 
@@ -406,7 +407,8 @@ async def run_setup_flow(
     embed = build_profile_embed(target_member, db_data, suffix)
     await interaction.channel.send(
         content=f"✅ **{target_member.mention}** 님의 정보가 업데이트되었습니다!",
-        embed=embed
+        embed=embed,
+        view=EntryButtonView() if is_first_entry else None
     )
 
 
@@ -452,7 +454,7 @@ class EntryButtonView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="내전 입장 등록", style=discord.ButtonStyle.primary, custom_id="persistent_entry_btn")
+    @discord.ui.button(label="서버 프로필 등록", style=discord.ButtonStyle.primary, custom_id="persistent_entry_btn")
     async def entry_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         data = get_user_data(interaction.guild.id, interaction.user.id)
 

@@ -411,8 +411,8 @@ class GameCommands(commands.Cog):
             return await interaction.followup.send("❌ 권한이 없습니다.", ephemeral=True)
 
         embed = discord.Embed(
-            title="🎮 내전 프로필 등록",
-            description="아래 버튼을 눌러 본인의 포지션과 티어, 배틀태그를 등록해야 내전에 참여할 수 있습니다.",
+            title="🎮 서버 프로필 및 역할 등록",
+            description="아래 버튼을 눌러 프로필을 등록해야 서버에 참여할 수 있습니다.",
             color=discord.Color.green()
         )
         await interaction.channel.send(embed=embed, view=views.EntryButtonView())
