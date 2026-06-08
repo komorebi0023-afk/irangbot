@@ -48,6 +48,22 @@ def get_role_id(guild_id, role_key):
     data = doc.to_dict()
     return int(data.get('role_id')) if data and 'role_id' in data else None
 
+def get_all_mapped_role_ids(guild_id):
+    """pos_* 및 tier_* 에 해당하는 모든 역할 ID 목록 반환 (역할 동기화용)"""
+    roles_ref = db.collection('servers').document(str(guild_id)).collection('roles')
+    docs = roles_ref.stream()
+    result = []
+    for doc in docs:
+        key = doc.id
+        if key.startswith('pos_') or key.startswith('tier_'):
+            data = doc.to_dict()
+            if data and 'role_id' in data:
+                try:
+                    result.append(int(data['role_id']))
+                except (ValueError, TypeError):
+                    pass
+    return result
+
 def get_server_config(guild_id):
     doc = db.collection('servers').document(str(guild_id)).collection('config').document('main').get()
     return doc.to_dict() if doc.exists else {}
@@ -59,14 +75,12 @@ def is_admin(ctx):
     # 1. 서버장 및 관리자 권한 체크
     if ctx.author.guild_permissions.administrator:
         return True
-    
     # 2. 지정된 관리자 역할 체크
     cfg = get_server_config(ctx.guild.id)
     admin_role_id = cfg.get('admin_role_id')
     if admin_role_id:
         if any(role.id == int(admin_role_id) for role in ctx.author.roles):
             return True
-            
     return False
 
 def save_match_data(guild_id, data):
