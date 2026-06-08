@@ -387,18 +387,21 @@ class GameCommands(commands.Cog):
         await interaction.followup.send("✅ 포지션 역할이 매핑되었습니다.", ephemeral=True)
 
     @server_setup.command(name="티어역할", description="티어에 맞게 지급될 디스코드 역할을 설정합니다.")
-    async def setup_tier_roles(self, interaction: discord.Interaction, 브론즈: discord.Role = None, 실버: discord.Role = None, 골드: discord.Role = None, 플래티넘: discord.Role = None, 다이아몬드: discord.Role = None, 마스터: discord.Role = None):
+    async def setup_tier_roles(self, interaction: discord.Interaction, 언랭: discord.Role = None, 브론즈: discord.Role = None, 실버: discord.Role = None, 골드: discord.Role = None, 플래티엄: discord.Role = None, 다이아몬드: discord.Role = None, 마스터: discord.Role = None, 그랜드마스터: discord.Role = None, 챔피언: discord.Role = None):
         await interaction.response.defer(ephemeral=True)
         if not check_admin(interaction):
             return await interaction.followup.send("❌ 권한이 없습니다.", ephemeral=True)
 
         roles_ref = db.collection('servers').document(str(interaction.guild.id)).collection('roles')
+        if 언랭: roles_ref.document('tier_언랭').set({'role_id': str(언랭.id)})
         if 브론즈: roles_ref.document('tier_브론즈').set({'role_id': str(브론즈.id)})
         if 실버: roles_ref.document('tier_실버').set({'role_id': str(실버.id)})
         if 골드: roles_ref.document('tier_골드').set({'role_id': str(골드.id)})
-        if 플래티넘: roles_ref.document('tier_플래티넘').set({'role_id': str(플래티넘.id)})
+        if 플래티엄: roles_ref.document('tier_플래티엄').set({'role_id': str(플래티엄.id)})
         if 다이아몬드: roles_ref.document('tier_다이아몬드').set({'role_id': str(다이아몬드.id)})
         if 마스터: roles_ref.document('tier_마스터').set({'role_id': str(마스터.id)})
+        if 그랜드마스터: roles_ref.document('tier_그랜드마스터').set({'role_id': str(그랜드마스터.id)})
+        if 챔피언: roles_ref.document('tier_챔피언').set({'role_id': str(챔피언.id)})
         await interaction.followup.send("✅ 티어 역할이 매핑되었습니다.", ephemeral=True)
 
     @app_commands.command(name="입장채널세팅", description="[관리자] 현재 채널에 내전 입장 영구 버튼을 생성합니다.")

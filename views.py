@@ -134,7 +134,7 @@ class PositionTierView(discord.ui.View):
             placeholder="🏆 최고 티어 선택",
             options=[
                 discord.SelectOption(label=t) for t in
-                ["브론즈", "실버", "골드", "플래티넘", "다이아", "마스터", "그랜드마스터", "챔피언", "언랭크"]
+                ["언랭", "브론즈", "실버", "골드", "플래티엄", "다이아몬드", "마스터", "그랜드마스터", "챔피언"]
             ],
             custom_id="max_tier", row=2
         )
@@ -145,7 +145,7 @@ class PositionTierView(discord.ui.View):
             placeholder="🏅 현재 티어 선택",
             options=[
                 discord.SelectOption(label=t) for t in
-                ["브론즈", "실버", "골드", "플래티넘", "다이아", "마스터", "그랜드마스터", "챔피언", "언랭크"]
+                ["언랭", "브론즈", "실버", "골드", "플래티엄", "다이아몬드", "마스터", "그랜드마스터", "챔피언"]
             ],
             custom_id="current_tier", row=3
         )
