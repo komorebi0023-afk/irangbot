@@ -4,6 +4,7 @@ from discord.ext import commands
 import random
 import time
 import traceback
+from datetime import datetime, timezone, timedelta
 from db_interface import (
     get_user_data, update_user_points, update_user_stats,
     get_server_config, update_server_config, db, delete_user_stats
@@ -130,29 +131,22 @@ class GameCommands(commands.Cog):
     # [일반] 출석 / 구제
     # ─────────────────────────────────────────────
 
-    @app_commands.command(name="출석", description="하루에 한 번(24시간) 10~100 포인트를 랜덤하게 받습니다.")
+    @app_commands.command(name="출석", description="하루에 한 번 10~100 포인트를 랜덤하게 받습니다.")
     async def daily_attendance(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=False)
         guild_id, user_id = interaction.guild.id, interaction.user.id
         data = get_user_data(guild_id, user_id)
 
-        last_daily = data.get('last_daily', 0)
-        # 빈 문자열 또는 날짜 문자열 등 이상한 값 방어
-        try:
-            last_daily = float(last_daily) if last_daily else 0.0
-        except (ValueError, TypeError):
-            last_daily = 0.0
+        KST = timezone(timedelta(hours=9))
+        today_kst = datetime.now(KST).strftime('%Y-%m-%d')
+        last_daily = data.get('last_daily', '')
 
-        now = time.time()
-        if now - last_daily < 86400:
-            remain = int(86400 - (now - last_daily))
-            hours, rem = divmod(remain, 3600)
-            mins, _ = divmod(rem, 60)
-            return await interaction.followup.send(f"❌ 아직 출석할 수 없습니다. ({hours}시간 {mins}분 남음)")
+        if last_daily == today_kst:
+            return await interaction.followup.send("❌ 오늘 이미 출석했습니다. 자정이 지나면 다시 출석할 수 있습니다.")
 
         reward = random.randint(10, 100)
         update_user_points(guild_id, user_id, reward)
-        update_user_stats(guild_id, user_id, {'last_daily': now})
+        update_user_stats(guild_id, user_id, {'last_daily': today_kst})
         await interaction.followup.send(f"🎉 출석 체크 완료! 랜덤으로 **{reward}P**를 획득했습니다.")
 
     @app_commands.command(name="구제", description="잔액이 100P 이하일 때 하루 1번 300P를 지원받습니다.")
@@ -164,18 +158,15 @@ class GameCommands(commands.Cog):
         if data.get('points', 0) > 100:
             return await interaction.followup.send("❌ 잔액이 100P 이하일 때만 구제금을 받을 수 있습니다.")
 
-        last_relief = data.get('last_relief', 0)
-        try:
-            last_relief = float(last_relief) if last_relief else 0.0
-        except (ValueError, TypeError):
-            last_relief = 0.0
+        KST = timezone(timedelta(hours=9))
+        today_kst = datetime.now(KST).strftime('%Y-%m-%d')
+        last_relief = data.get('last_relief', '')
 
-        now = time.time()
-        if now - last_relief < 86400:
-            return await interaction.followup.send("❌ 구제금은 24시간에 한 번만 받을 수 있습니다.")
+        if last_relief == today_kst:
+            return await interaction.followup.send("❌ 오늘 이미 구제금을 받았습니다. 자정이 지나면 다시 받을 수 있습니다.")
 
         update_user_points(guild_id, user_id, 300)
-        update_user_stats(guild_id, user_id, {'last_relief': now})
+        update_user_stats(guild_id, user_id, {'last_relief': today_kst})
         await interaction.followup.send("🪙 파산 구제금 **300P**가 지급되었습니다. 건투를 빕니다!")
 
     # ─────────────────────────────────────────────
