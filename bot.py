@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands, tasks
+from discord import app_commands
 import sqlite3
 import random
 import os
@@ -45,7 +46,7 @@ def on_roles_snapshot(col_snapshot, changes, read_time):
     c = conn.cursor()
     for doc in col_snapshot:
         # 문서 경로(예: servers/12345/roles/tier_bronze)를 분석하여 guild_id 추출
-        path_parts = doc.reference.path.split('/')
+        path_parts = doc.reference.path.split('!')
         if len(path_parts) >= 3:
             guild_id = path_parts[1]
             role_key = doc.id  # 예: '탱커', '브론즈', '기본입장'
@@ -114,7 +115,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
+bot = commands.Bot(command_prefix='/', intents=intents, help_command=None)
 
 # 채팅 포인트 쿨타임 (메모리)
 chat_cooldowns = {} 
@@ -1772,19 +1773,21 @@ async def set_entry_take(ctx, role: discord.Role = None):
         set_role_id(ctx.guild.id, "entry_take", None)
         await ctx.send("✅ 입장 제거 역할 설정이 해제되었습니다.")
 
-@bot.command(name='포지션설정')
-async def set_pos_role(ctx, pos_name: str, role: discord.Role = None):
-    if not is_admin(ctx): return await ctx.send("❌ 관리자 전용 명령어입니다.")
+@bot.tree.command(name="포지션설정", description="서버의 포지션 역할을 설정합니다.")
+@app_commands.describe(pos_name="설정할 포지션 (돌격/공격/지원/자유)", role="부여할 역할 (해제하려면 비워두세요)")
+@app_commands.default_permissions(administrator=True) # 관리자 전용 권한 설정
+async def set_pos_role_slash(interaction: discord.Interaction, pos_name: str, role: discord.Role = None):
     valid_pos = ["돌격", "공격", "지원", "자유"]
     if pos_name not in valid_pos:
-        return await ctx.send(f"❌ 포지션 이름은 다음 중 하나여야 합니다: `{', '.join(valid_pos)}`\n(사용법: `!포지션설정 돌격 @역할`)")
+        return await interaction.response.send_message(f"❌ 포지션 이름은 다음 중 하나여야 합니다: `{', '.join(valid_pos)}`", ephemeral=True)
     
+    guild_id = interaction.guild_id
     if role:
-        set_role_id(ctx.guild.id, f"pos_{pos_name}", role.id)
-        await ctx.send(f"✅ **{pos_name}** 포지션 역할이 {role.mention} (으)로 설정되었습니다.")
+        set_role_id(guild_id, f"pos_{pos_name}", role.id)
+        await interaction.response.send_message(f"✅ **{pos_name}** 포지션 역할이 {role.mention} (으)로 설정되었습니다.")
     else:
-        set_role_id(ctx.guild.id, f"pos_{pos_name}", None)
-        await ctx.send(f"✅ **{pos_name}** 포지션 역할 설정이 해제되었습니다.")
+        set_role_id(guild_id, f"pos_{pos_name}", None)
+        await interaction.response.send_message(f"✅ **{pos_name}** 포지션 역할 설정이 해제되었습니다.")
 
 @bot.command(name='티어설정')
 async def set_tier_role(ctx, tier_name: str, role: discord.Role = None):
@@ -1827,21 +1830,21 @@ class PositionTierView(discord.ui.View):
         }
 
         # 1. 주 포지션 선택 드롭다운
-        main_pos_select = discord.ui.Select(placeholder="⚔️ 주 포지션 선택", options=[
-            discord.SelectOption(label="탱커", emoji="🛡️"),
-            discord.SelectOption(label="딜러", emoji="⚔️"),
-            discord.SelectOption(label="힐러", emoji="💉"),
-            discord.SelectOption(label="올라운더", emoji="⭐")
+       main_pos_select = discord.ui.Select(placeholder="⚔️ 주 포지션 선택", options=[
+            discord.SelectOption(label="돌격", emoji="🛡️"),
+            discord.SelectOption(label="공격", emoji="⚔️"),
+            discord.SelectOption(label="지원", emoji="💉"),
+            discord.SelectOption(label="자유", emoji="⭐")
         ], custom_id="main_pos", row=0)
         main_pos_select.callback = self.select_callback
         self.add_item(main_pos_select)
 
         # 2. 부 포지션 선택 드롭다운
         sub_pos_select = discord.ui.Select(placeholder="🛡️ 부 포지션 선택", options=[
-            discord.SelectOption(label="탱커", emoji="🛡️"),
-            discord.SelectOption(label="딜러", emoji="⚔️"),
-            discord.SelectOption(label="힐러", emoji="💉"),
-            discord.SelectOption(label="올라운더", emoji="⭐"),
+            discord.SelectOption(label="돌격", emoji="🛡️"),
+            discord.SelectOption(label="공격", emoji="⚔️"),
+            discord.SelectOption(label="지원", emoji="💉"),
+            discord.SelectOption(label="자유", emoji="⭐"),
             discord.SelectOption(label="없음", emoji="❌")
         ], custom_id="sub_pos", row=1)
         sub_pos_select.callback = self.select_callback
@@ -2193,6 +2196,27 @@ async def reset_stats(ctx, target: str = None):
         await ctx.send(f"✅ **{target_user.display_name}** 님의 전적(승/패)이 초기화되었습니다.\n*(단일 유저 초기화의 경우, 전적 시트의 과거 기록 줄은 수동으로 삭제하셔야 완벽히 수식이 맞습니다)*")
         
     conn.close()
+
+@bot.tree.command(name="모집", description="현재 있는 통화방으로 유저들을 모집합니다.")
+@app_commands.describe(message="모집 메시지 (선택 사항)")
+async def recruit_slash(interaction: discord.Interaction, message: str = "같이 게임하실 분 구합니다!"):
+    # 1. 유저가 음성 채널에 접속해 있는지 확인
+    if not interaction.user.voice or not interaction.user.voice.channel:
+        return await interaction.response.send_message("❌ 먼저 통화방(음성 채널)에 접속한 상태로 명령어를 사용해주세요.", ephemeral=True)
+    
+    voice_channel = interaction.user.voice.channel
+    
+    # 2. 해당 음성 채널의 초대 링크 생성 (만료 시간: 1시간, 사용 횟수: 무제한)
+    invite = await voice_channel.create_invite(max_age=0, max_uses=0, reason="파티 모집")
+    
+    # 3. URL 버튼이 포함된 뷰 생성
+    view = discord.ui.View()
+    button = discord.ui.Button(label="통화방 참가하기", url=invite.url, style=discord.ButtonStyle.link, emoji="🔊")
+    view.add_item(button)
+    
+    # 4. 메시지와 버튼 전송
+    content = f"📢 **{interaction.user.display_name}** 님이 같이 게임할 사람을 모집해요!\n💬 : {message}"
+    await interaction.response.send_message(content=content, view=view)
 
 # 봇이 속한 서버의 채널/역할 정보를 Firestore에 덤프하는 함수
 async def dump_guild_data(guild):
