@@ -104,3 +104,48 @@ def save_match_history(guild_id, team1_users, team2_users, winner_team):
 
 def delete_user_stats(guild_id, user_id):
     db.collection('servers').document(str(guild_id)).collection('users').document(str(user_id)).delete()
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 임시채널 관련 헬퍼
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def get_temp_channel_config(guild_id):
+    """임시채널 설정 반환 (대시보드에서 저장한 config에서 읽음)"""
+    cfg = get_server_config(guild_id)
+    return {
+        'enabled':           cfg.get('temp_channel_enabled', False),
+        'trigger_channel_id': cfg.get('temp_trigger_channel_id', ''),
+        'category_id':        cfg.get('temp_category_id', ''),
+        'delete_timeout':     int(cfg.get('temp_delete_timeout', 30)),
+        'max_channels':       int(cfg.get('temp_max_channels', 0)),
+        'default_user_limit': int(cfg.get('temp_default_user_limit', 0)),
+    }
+
+def save_temp_channel(guild_id, channel_id, owner_id):
+    """생성된 임시채널 정보 저장"""
+    db.collection('servers').document(str(guild_id)).collection('temp_channels').document(str(channel_id)).set({
+        'channel_id': str(channel_id),
+        'owner_id':   str(owner_id),
+        'created_at': firestore.SERVER_TIMESTAMP,
+    })
+
+def delete_temp_channel(guild_id, channel_id):
+    """임시채널 정보 삭제"""
+    db.collection('servers').document(str(guild_id)).collection('temp_channels').document(str(channel_id)).delete()
+
+def get_temp_channel(guild_id, channel_id):
+    """임시채널 정보 조회"""
+    doc = db.collection('servers').document(str(guild_id)).collection('temp_channels').document(str(channel_id)).get()
+    return doc.to_dict() if doc.exists else None
+
+def get_user_temp_channel_count(guild_id, owner_id):
+    """유저가 현재 생성한 임시채널 수 조회"""
+    docs = db.collection('servers').document(str(guild_id)).collection('temp_channels')\
+        .where('owner_id', '==', str(owner_id)).stream()
+    return sum(1 for _ in docs)
+
+def update_temp_channel_owner(guild_id, channel_id, new_owner_id):
+    """임시채널 방장 변경"""
+    db.collection('servers').document(str(guild_id)).collection('temp_channels').document(str(channel_id)).set(
+        {'owner_id': str(new_owner_id)}, merge=True
+    )

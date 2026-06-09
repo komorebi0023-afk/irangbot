@@ -4,12 +4,21 @@ import random
 import time
 import asyncio
 import threading
-from db_interface import db, update_user_points, get_server_config, delete_user_stats
+from db_interface import (
+    db, update_user_points, get_server_config, delete_user_stats,
+    get_temp_channel_config, save_temp_channel, delete_temp_channel,
+    get_temp_channel, get_user_temp_channel_count, update_temp_channel_owner
+)
 from google.cloud import firestore
+import views
 
 chat_cooldowns = {}
 
+# 임시채널 삭제 대기 중인 태스크 관리 {channel_id: asyncio.Task}
+_temp_delete_tasks = {}
+
 def setup_events(bot):
+
     @tasks.loop(minutes=10)
     async def voice_reward_loop():
         for guild in bot.guilds:
@@ -24,22 +33,20 @@ def setup_events(bot):
     async def dump_guild_data_to_firestore(guild_id):
         guild = bot.get_guild(int(guild_id))
         if not guild: return
-        
-        text_channels = [{"id": str(c.id), "name": c.name} for c in guild.text_channels]
+        text_channels  = [{"id": str(c.id), "name": c.name} for c in guild.text_channels]
         voice_channels = [{"id": str(c.id), "name": c.name} for c in guild.voice_channels]
-        roles = [{"id": str(r.id), "name": r.name} for r in guild.roles if not r.is_default()]
-        
+        roles          = [{"id": str(r.id), "name": r.name} for r in guild.roles if not r.is_default()]
         db.collection('servers').document(str(guild_id)).set({
-            'text_channels': text_channels,
+            'text_channels':  text_channels,
             'voice_channels': voice_channels,
-            'discord_roles': roles,
-            'last_sync': firestore.SERVER_TIMESTAMP  # 수정됨
+            'discord_roles':  roles,
+            'last_sync':      firestore.SERVER_TIMESTAMP
         }, merge=True)
 
     def on_dashboard_request_snapshot(col_snapshot, changes, read_time):
         for change in changes:
             if change.type.name in ['ADDED', 'MODIFIED']:
-                doc = change.document
+                doc  = change.document
                 data = doc.to_dict()
                 if data.get('sync_requested') == True:
                     bot.loop.create_task(dump_guild_data_to_firestore(doc.id))
@@ -51,9 +58,35 @@ def setup_events(bot):
     listener_thread = threading.Thread(target=start_firestore_listener, daemon=True)
     listener_thread.start()
 
+    # ── 임시채널 삭제 스케줄러 ────────────────────────────────
+    async def schedule_temp_channel_delete(guild_id, channel_id, timeout):
+        """timeout초 후 채널이 비어있으면 삭제"""
+        await asyncio.sleep(timeout)
+        guild   = bot.get_guild(int(guild_id))
+        if not guild: return
+        channel = guild.get_channel(int(channel_id))
+        if not channel: 
+            delete_temp_channel(str(guild_id), str(channel_id))
+            return
+        real_members = [m for m in channel.members if not m.bot]
+        if len(real_members) == 0:
+            try:
+                await channel.delete(reason="임시채널 자동 삭제 (빈 채널)")
+            except Exception:
+                pass
+            delete_temp_channel(str(guild_id), str(channel_id))
+        _temp_delete_tasks.pop(channel_id, None)
+
+    def cancel_delete_task(channel_id):
+        task = _temp_delete_tasks.pop(channel_id, None)
+        if task and not task.done():
+            task.cancel()
+
+    # ── 이벤트 핸들러 ─────────────────────────────────────────
+
     @bot.event
     async def on_ready():
-        print(f'✅ {bot.user.name} 로그인 성공! 멀티 서버 기능 및 Firestore 리스너 가동.')
+        print(f'✅ {bot.user.name} 로그인 성공!')
         if not voice_reward_loop.is_running():
             voice_reward_loop.start()
         await bot.tree.sync()
@@ -63,9 +96,9 @@ def setup_events(bot):
         if message.type == discord.MessageType.new_member:
             try: await message.delete()
             except: pass
-        
+
         if message.author.bot: return
-        
+
         uid = str(message.author.id)
         now = time.time()
         if uid not in chat_cooldowns or (now - chat_cooldowns[uid]) >= 30:
@@ -73,12 +106,95 @@ def setup_events(bot):
                 reward = random.randint(1, 5)
                 update_user_points(message.guild.id, uid, reward)
                 chat_cooldowns[uid] = now
-            
+
         await bot.process_commands(message)
 
     @bot.event
     async def on_member_remove(member):
         guild_id = str(member.guild.id)
-        user_id = str(member.id)
+        user_id  = str(member.id)
         delete_user_stats(guild_id, user_id)
         print(f"🗑️ [데이터 삭제] {member.display_name} 님 정보 제거 완료.")
+
+    @bot.event
+    async def on_voice_state_update(member, before, after):
+        if member.bot: return
+        guild    = member.guild
+        guild_id = str(guild.id)
+
+        cfg = get_temp_channel_config(guild_id)
+        if not cfg.get('enabled'): return
+
+        trigger_id = cfg.get('trigger_channel_id', '')
+        category_id = cfg.get('category_id', '')
+        timeout    = cfg.get('delete_timeout', 30)
+        max_ch     = cfg.get('max_channels', 0)
+        user_limit = cfg.get('default_user_limit', 0)
+
+        # ── 트리거 채널 접속 → 임시채널 생성 ──────────────────
+        if after.channel and str(after.channel.id) == trigger_id:
+            # 최대 채널 수 체크
+            if max_ch > 0:
+                count = get_user_temp_channel_count(guild_id, str(member.id))
+                if count >= max_ch:
+                    try:
+                        await member.send(f"❌ 임시채널은 최대 {max_ch}개까지만 생성할 수 있습니다.")
+                    except Exception:
+                        pass
+                    return
+
+            # 카테고리 설정
+            category = guild.get_channel(int(category_id)) if category_id else None
+
+            # 닉네임 기반 채널명
+            nick     = member.display_name.split(' (')[0]
+            ch_name  = f"{nick}의 채널"
+
+            try:
+                new_channel = await guild.create_voice_channel(
+                    name=ch_name,
+                    category=category,
+                    user_limit=user_limit,
+                    reason=f"임시채널 생성 by {member.display_name}"
+                )
+                # 유저를 새 채널로 이동
+                await member.move_to(new_channel)
+
+                # DB 저장
+                save_temp_channel(guild_id, str(new_channel.id), str(member.id))
+
+                # 제어 패널 전송
+                await asyncio.sleep(0.5)  # 채널 안정화 대기
+                await views.send_temp_channel_panel(new_channel, member)
+
+            except Exception as e:
+                print(f"❌ [임시채널 생성 실패] {e}")
+            return
+
+        # ── 임시채널에서 유저가 나갔을 때 처리 ───────────────
+        if before.channel and before.channel.id != int(trigger_id or 0):
+            tc = get_temp_channel(guild_id, str(before.channel.id))
+            if not tc: return
+
+            real_members = [m for m in before.channel.members if not m.bot]
+
+            # 채널이 비었으면 삭제 스케줄
+            if len(real_members) == 0:
+                cancel_delete_task(before.channel.id)
+                task = asyncio.create_task(
+                    schedule_temp_channel_delete(guild_id, before.channel.id, timeout)
+                )
+                _temp_delete_tasks[before.channel.id] = task
+
+            # 방장이 나갔고 채널에 다른 유저가 있으면 자동으로 방장 위임
+            elif str(member.id) == str(tc.get('owner_id')):
+                new_owner = next((m for m in real_members), None)
+                if new_owner:
+                    update_temp_channel_owner(guild_id, str(before.channel.id), str(new_owner.id))
+                    await views.update_temp_channel_panel(before.channel, new_owner)
+
+        # ── 임시채널에 유저가 들어왔을 때 → 삭제 타이머 취소 ──
+        if after.channel:
+            tc = get_temp_channel(guild_id, str(after.channel.id))
+            if tc:
+                cancel_delete_task(after.channel.id)

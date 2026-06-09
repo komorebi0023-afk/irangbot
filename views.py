@@ -627,3 +627,178 @@ class AdminControlPanel(discord.ui.View):
             content=f"🎉 정산 완료! 승리 팀 배팅자 {payouts}명에게 2배 지급, 전적이 업데이트되었습니다.",
             view=None
         )
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 8. 임시채널 제어 패널
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class TempChannelRenameModal(discord.ui.Modal, title="채널 이름 변경"):
+    new_name = discord.ui.TextInput(
+        label="새 채널 이름",
+        placeholder="예: 즐거운 내전방",
+        max_length=100,
+        required=True
+    )
+
+    def __init__(self, channel):
+        super().__init__()
+        self.channel = channel
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            await self.channel.edit(name=self.new_name.value)
+            await interaction.response.send_message(
+                f"✅ 채널 이름이 **{self.new_name.value}**으로 변경되었습니다.", ephemeral=True
+            )
+        except discord.errors.Forbidden:
+            await interaction.response.send_message("❌ 채널 이름을 변경할 권한이 없습니다.", ephemeral=True)
+
+
+class TempChannelLimitModal(discord.ui.Modal, title="최대 인원 변경"):
+    new_limit = discord.ui.TextInput(
+        label="최대 인원 (0 = 무제한)",
+        placeholder="예: 5",
+        max_length=2,
+        required=True
+    )
+
+    def __init__(self, channel):
+        super().__init__()
+        self.channel = channel
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not self.new_limit.value.isdigit():
+            return await interaction.response.send_message("❌ 숫자만 입력해주세요.", ephemeral=True)
+        limit = int(self.new_limit.value)
+        try:
+            await self.channel.edit(user_limit=limit)
+            msg = "무제한" if limit == 0 else f"{limit}명"
+            await interaction.response.send_message(
+                f"✅ 최대 인원이 **{msg}**으로 변경되었습니다.", ephemeral=True
+            )
+        except discord.errors.Forbidden:
+            await interaction.response.send_message("❌ 인원을 변경할 권한이 없습니다.", ephemeral=True)
+
+
+class TempChannelTransferSelect(discord.ui.Select):
+    def __init__(self, channel, current_owner_id):
+        self.channel          = channel
+        self.current_owner_id = current_owner_id
+
+        members = [m for m in channel.members if not m.bot and m.id != current_owner_id]
+        options = [
+            discord.SelectOption(label=m.display_name, value=str(m.id))
+            for m in members[:25]
+        ] if members else [
+            discord.SelectOption(label="채널에 다른 유저가 없습니다.", value="none")
+        ]
+
+        super().__init__(
+            placeholder="방장을 넘길 유저를 선택하세요",
+            min_values=1, max_values=1,
+            options=options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        if self.values[0] == "none":
+            return await interaction.response.send_message("❌ 채널에 다른 유저가 없습니다.", ephemeral=True)
+
+        new_owner_id = int(self.values[0])
+        new_owner    = interaction.guild.get_member(new_owner_id)
+        if not new_owner:
+            return await interaction.response.send_message("❌ 유저를 찾을 수 없습니다.", ephemeral=True)
+
+        db_interface.update_temp_channel_owner(
+            str(interaction.guild.id), str(self.channel.id), str(new_owner_id)
+        )
+        await update_temp_channel_panel(self.channel, new_owner)
+        await interaction.response.send_message(
+            f"✅ **{new_owner.display_name}** 님에게 방장이 넘어갔습니다.", ephemeral=True
+        )
+
+
+class TempChannelTransferView(discord.ui.View):
+    def __init__(self, channel, current_owner_id):
+        super().__init__(timeout=60)
+        self.add_item(TempChannelTransferSelect(channel, current_owner_id))
+
+
+class TempChannelControlView(discord.ui.View):
+    def __init__(self, channel_id, owner_id):
+        super().__init__(timeout=None)
+        self.channel_id = channel_id
+        self.owner_id   = owner_id
+
+    def _check_owner(self, interaction: discord.Interaction) -> bool:
+        tc = db_interface.get_temp_channel(str(interaction.guild.id), str(self.channel_id))
+        if not tc:
+            return False
+        return str(interaction.user.id) == str(tc.get('owner_id'))
+
+    @discord.ui.button(label="이름 변경", style=discord.ButtonStyle.primary, custom_id="tc_rename", row=0)
+    async def rename_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self._check_owner(interaction):
+            return await interaction.response.send_message("❌ 방장만 변경할 수 있습니다.", ephemeral=True)
+        channel = interaction.guild.get_channel(self.channel_id)
+        if not channel:
+            return await interaction.response.send_message("❌ 채널을 찾을 수 없습니다.", ephemeral=True)
+        await interaction.response.send_modal(TempChannelRenameModal(channel))
+
+    @discord.ui.button(label="인원 변경", style=discord.ButtonStyle.secondary, custom_id="tc_limit", row=0)
+    async def limit_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self._check_owner(interaction):
+            return await interaction.response.send_message("❌ 방장만 변경할 수 있습니다.", ephemeral=True)
+        channel = interaction.guild.get_channel(self.channel_id)
+        if not channel:
+            return await interaction.response.send_message("❌ 채널을 찾을 수 없습니다.", ephemeral=True)
+        await interaction.response.send_modal(TempChannelLimitModal(channel))
+
+    @discord.ui.button(label="방장 넘기기", style=discord.ButtonStyle.secondary, custom_id="tc_transfer", row=0)
+    async def transfer_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self._check_owner(interaction):
+            return await interaction.response.send_message("❌ 방장만 넘길 수 있습니다.", ephemeral=True)
+        channel = interaction.guild.get_channel(self.channel_id)
+        if not channel:
+            return await interaction.response.send_message("❌ 채널을 찾을 수 없습니다.", ephemeral=True)
+        view = TempChannelTransferView(channel, interaction.user.id)
+        await interaction.response.send_message(view=view, ephemeral=True)
+
+
+async def send_temp_channel_panel(channel: discord.VoiceChannel, owner: discord.Member):
+    """임시채널 생성 시 제어 패널 임베드 전송"""
+    embed = discord.Embed(
+        title="🔊 음성채널 제어 패널",
+        description=f"현재 방장: {owner.mention}",
+        color=discord.Color.blue()
+    )
+    embed.add_field(name="이름 변경", value="채널 이름을 수정합니다.", inline=True)
+    embed.add_field(name="인원 변경", value="최대 인원을 설정합니다.", inline=True)
+    embed.add_field(name="방장 넘기기", value="다른 유저에게 방장을 넘깁니다.", inline=True)
+    embed.set_footer(text="방장만 제어 패널을 사용할 수 있습니다.")
+
+    view = TempChannelControlView(channel.id, owner.id)
+    await channel.send(content=owner.mention, embed=embed, view=view)
+
+
+async def update_temp_channel_panel(channel: discord.VoiceChannel, new_owner: discord.Member):
+    """방장 변경 시 제어 패널 업데이트"""
+    embed = discord.Embed(
+        title="🔊 음성채널 제어 패널",
+        description=f"현재 방장: {new_owner.mention}",
+        color=discord.Color.blue()
+    )
+    embed.add_field(name="이름 변경", value="채널 이름을 수정합니다.", inline=True)
+    embed.add_field(name="인원 변경", value="최대 인원을 설정합니다.", inline=True)
+    embed.add_field(name="방장 넘기기", value="다른 유저에게 방장을 넘깁니다.", inline=True)
+    embed.set_footer(text="방장만 제어 패널을 사용할 수 있습니다.")
+
+    view = TempChannelControlView(channel.id, new_owner.id)
+    try:
+        async for message in channel.history(limit=20):
+            if message.author.bot and message.embeds and "음성채널 제어 패널" in message.embeds[0].title:
+                await message.edit(content=new_owner.mention, embed=embed, view=view)
+                return
+    except Exception:
+        pass
+    await channel.send(content=new_owner.mention, embed=embed, view=view)
