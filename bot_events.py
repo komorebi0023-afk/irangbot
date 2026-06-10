@@ -119,6 +119,19 @@ def setup_events(bot):
             voice_reward_loop.start()
         await bot.tree.sync()
 
+        # 현재 참여 중인 서버 목록 public_servers에 동기화
+        for guild in bot.guilds:
+            try:
+                db.collection('public_servers').document(str(guild.id)).set({
+                    'guild_id':     str(guild.id),
+                    'name':         guild.name,
+                    'icon':         str(guild.icon) if guild.icon else None,
+                    'member_count': guild.member_count,
+                }, merge=True)
+            except Exception as e:
+                print(f"❌ [서버 목록 동기화 실패] {guild.name}: {e}")
+        print(f"✅ {len(bot.guilds)}개 서버 목록 동기화 완료")
+
     @bot.event
     async def on_message(message):
         if message.type == discord.MessageType.new_member:
