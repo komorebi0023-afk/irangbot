@@ -125,7 +125,7 @@ def setup_events(bot):
                 db.collection('public_servers').document(str(guild.id)).set({
                     'guild_id':     str(guild.id),
                     'name':         guild.name,
-                    'icon':         str(guild.icon) if guild.icon else None,
+                    'icon': str(guild.icon.key) if guild.icon else None,
                     'member_count': guild.member_count,
                 }, merge=True)
             except Exception as e:
@@ -218,7 +218,7 @@ def setup_events(bot):
             db.collection('public_servers').document(guild_id).set({
                 'guild_id':    guild_id,
                 'name':        guild.name,
-                'icon':        str(guild.icon) if guild.icon else None,
+                'icon': str(guild.icon.key) if guild.icon else None,
                 'member_count': guild.member_count,
             }, merge=True)
         except Exception as e:
