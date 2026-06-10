@@ -123,9 +123,10 @@ def setup_events(bot):
         for guild in bot.guilds:
             try:
                 db.collection('public_servers').document(str(guild.id)).set({
-                    'guild_id': str(guild.id),
-                    'name':     guild.name,
-                    'icon':     str(guild.icon) if guild.icon else None,
+                    'guild_id':     str(guild.id),
+                    'name':         guild.name,
+                    'icon':         str(guild.icon) if guild.icon else None,
+                    'member_count': guild.member_count,
                 }, merge=True)
             except Exception as e:
                 print(f"❌ [서버 목록 동기화 실패] {guild.name}: {e}")
