@@ -411,6 +411,37 @@ async def run_setup_flow(
         view=EntryButtonView() if is_first_entry else None
     )
 
+    # ── 데이터 등록 완료 웰컴 카드 메시지 전송 ────────
+    if is_first_entry:
+        try:
+            cards_snap = db_interface.db.collection('servers').document(str(guild_id)).collection('welcome_cards').stream()
+            for doc in cards_snap:
+                card = doc.to_dict()
+                if not card.get('enabled', True): continue
+                if card.get('type') != 'register': continue
+                msg_template = card.get('message', '')
+                msg = (msg_template
+                    .replace('[user]',        target_member.mention)
+                    .replace('[userName]',    target_member.display_name)
+                    .replace('[memberCount]', str(interaction.guild.member_count))
+                    .replace('[server]',      interaction.guild.name)
+                    .replace('[inviter]',     '')
+                    .replace('[inviterName]', '')
+                    .replace('[invites]',     '')
+                )
+                channel_id = card.get('channel', '')
+                if not channel_id or not msg: continue
+                if channel_id == 'dm':
+                    try: await target_member.send(msg)
+                    except Exception: pass
+                else:
+                    ch = interaction.guild.get_channel(int(channel_id))
+                    if ch:
+                        try: await ch.send(msg)
+                        except Exception: pass
+        except Exception as e:
+            print(f"❌ [등록 완료 메시지 오류] {e}")
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 5. 정보수정 / 유저관리 드롭다운 셀렉터

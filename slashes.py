@@ -94,6 +94,23 @@ class GameCommands(commands.Cog):
         await interaction.response.defer(ephemeral=False)
         await interaction.followup.send("🐾 https://www.instagram.com/i.rang0321/")
 
+    @app_commands.command(name="대시보드", description="이랑 봇 웹 대시보드로 이동합니다.")
+    async def dashboard_link(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        embed = discord.Embed(
+            title="🖥️ 이랑 대시보드",
+            description="아래 버튼을 눌러 웹 대시보드로 이동하세요.\n서버 설정, 유저 관리, 랭킹, 내전 기록 등을 웹에서 편리하게 관리할 수 있습니다.",
+            color=discord.Color.blue()
+        )
+        embed.add_field(name="🔗 대시보드 주소", value="https://irangbot.web.app", inline=False)
+        view = discord.ui.View()
+        view.add_item(discord.ui.Button(
+            label="대시보드 열기",
+            url="https://irangbot.web.app",
+            style=discord.ButtonStyle.link
+        ))
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
     # ─────────────────────────────────────────────
     # [일반] 맵 룰렛
     # ─────────────────────────────────────────────
