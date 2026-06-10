@@ -179,7 +179,6 @@ class GameCommands(commands.Cog):
         target = 대상 or interaction.user
         data = get_user_data(interaction.guild.id, target.id)
 
-        # 입장 미완료 유저 표기
         not_registered = (
             data.get('main_pos', '-') == '-' and
             data.get('battletag', '-') == '-'
@@ -190,11 +189,15 @@ class GameCommands(commands.Cog):
                 "입장 채널의 버튼을 눌러 등록해주세요."
             )
 
+        score_val = float(data.get('score', 0) or 0)
+        display_score = "미정" if score_val == 0 else f"{score_val:g}점"
+
         embed = discord.Embed(
             title=f"📊 {data.get('nickname', target.display_name)}님의 정보",
             color=discord.Color.blue()
         )
         embed.add_field(name="배틀태그", value=data.get('battletag', '-'), inline=True)
+        embed.add_field(name="내전 점수", value=display_score, inline=True)
         embed.add_field(name="티어", value=f"현재: {data.get('current_tier', '-')} / 최고: {data.get('max_tier', '-')}", inline=True)
         embed.add_field(name="포지션", value=f"주: {data.get('main_pos', '-')} / 부: {data.get('sub_pos', '-')}", inline=True)
         embed.add_field(name="모스트 영웅", value=data.get('main_hero', '-'), inline=False)
@@ -207,21 +210,43 @@ class GameCommands(commands.Cog):
         embed.set_thumbnail(url=target.display_avatar.url)
         await interaction.followup.send(embed=embed)
 
-    @app_commands.command(name="랭킹", description="서버 내 유저들의 포인트 랭킹을 확인합니다.")
-    async def show_ranking(self, interaction: discord.Interaction):
+    @app_commands.command(name="랭킹", description="서버 내 유저들의 포인트 및 승률 랭킹을 확인합니다.")
+    @app_commands.choices(종류=[
+        app_commands.Choice(name="포인트 랭킹", value="points"),
+        app_commands.Choice(name="승률 랭킹", value="winrate"),
+    ])
+    async def show_ranking(self, interaction: discord.Interaction, 종류: app_commands.Choice[str] = None):
         await interaction.response.defer(ephemeral=False)
         users_ref = db.collection('servers').document(str(interaction.guild.id)).collection('users')
         users = [doc.to_dict() for doc in users_ref.get()]
-        users.sort(key=lambda x: x.get('points', 0), reverse=True)
 
-        top_points = users[:10]
-        embed = discord.Embed(title="🏆 서버 포인트 랭킹 TOP 10", color=discord.Color.gold())
+        rank_type = 종류.value if 종류 else "points"
 
-        point_text = ""
-        for i, u in enumerate(top_points, 1):
-            point_text += f"**{i}위** {u.get('nickname', '알수없음')} - {u.get('points', 0):,} P\n"
+        if rank_type == "winrate":
+            def wr(u):
+                w = int(u.get('wins', 0))
+                l = int(u.get('losses', 0))
+                return w / (w + l) if (w + l) > 0 else 0
+            users = [u for u in users if int(u.get('wins', 0)) + int(u.get('losses', 0)) > 0]
+            users.sort(key=wr, reverse=True)
+            top = users[:10]
+            embed = discord.Embed(title="🏆 서버 승률 랭킹 TOP 10", color=discord.Color.blue())
+            text = ""
+            for i, u in enumerate(top, 1):
+                w = int(u.get('wins', 0))
+                l = int(u.get('losses', 0))
+                rate = round(w / (w + l) * 100, 1) if (w + l) > 0 else 0
+                text += f"**{i}위** {u.get('nickname', '알수없음')} - {rate}% ({w}승 {l}패)\n"
+            embed.add_field(name="📈 승률", value=text or "데이터 없음", inline=False)
+        else:
+            users.sort(key=lambda x: x.get('points', 0), reverse=True)
+            top = users[:10]
+            embed = discord.Embed(title="🏆 서버 포인트 랭킹 TOP 10", color=discord.Color.gold())
+            text = ""
+            for i, u in enumerate(top, 1):
+                text += f"**{i}위** {u.get('nickname', '알수없음')} - {u.get('points', 0):,} P\n"
+            embed.add_field(name="💰 포인트", value=text or "데이터 없음", inline=False)
 
-        embed.add_field(name="💰 포인트", value=point_text or "데이터 없음", inline=False)
         await interaction.followup.send(embed=embed)
 
     @app_commands.command(name="정보수정", description="자신의 내전 프로필(배틀태그, 영웅 등)을 수정합니다.")
@@ -433,13 +458,13 @@ class GameCommands(commands.Cog):
     # [관리자] 내전 시작
     # ─────────────────────────────────────────────
 
-    @app_commands.command(name="내전시작", description="[관리자] 대기실 인원을 바탕으로 내전 매칭, 밴픽, 배팅을 엽니다.")
+    @app_commands.command(name="내전시작", description="[관리자] 대기실 인원을 바탕으로 내전 매칭을 시작합니다.")
     async def start_civil_war(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=False)
         if not check_admin(interaction):
             return await interaction.followup.send("❌ 권한이 없습니다.", ephemeral=True)
 
-        cfg = get_server_config(interaction.guild.id)
+        cfg      = get_server_config(interaction.guild.id)
         lobby_id = cfg.get('lobby_id')
         if not lobby_id:
             return await interaction.followup.send("❌ `/서버세팅 채널`에서 대기실을 먼저 설정하세요.")
@@ -452,33 +477,81 @@ class GameCommands(commands.Cog):
         if len(members) < 2:
             return await interaction.followup.send(f"❌ 인원이 부족합니다. (현재 {len(members)}명)")
 
-        random.shuffle(members)
-        mid = len(members) // 2
-        t1_members, t2_members = members[:mid], members[mid:]
-        t1_cap, t2_cap = t1_members[0], t2_members[0]
+        # ── 내전 점수 체크 ─────────────────────────────────
+        no_score = []
+        scored   = []
+        for m in members:
+            data  = get_user_data(interaction.guild.id, m.id)
+            score = float(data.get('score', 0) or 0)
+            if score == 0:
+                no_score.append(m)
+            else:
+                scored.append((m, score))
 
+        if no_score:
+            names = ", ".join([m.display_name for m in no_score])
+            return await interaction.followup.send(
+                f"❌ 내전 점수가 없는 유저가 있습니다: **{names}**\n"
+                f"`/유저관리` 또는 대시보드에서 점수를 먼저 설정해주세요."
+            )
+
+        # ── 점수 기반 팀 밸런싱 (그리디 알고리즘) ──────────
+        # 점수 내림차순 정렬 후 번갈아 배치
+        scored.sort(key=lambda x: x[1], reverse=True)
+        t1_data, t2_data = [], []
+        t1_score = t2_score = 0.0
+
+        for member, score in scored:
+            if t1_score <= t2_score:
+                t1_data.append((member, score))
+                t1_score += score
+            else:
+                t2_data.append((member, score))
+                t2_score += score
+
+        t1_members = [m for m, _ in t1_data]
+        t2_members = [m for m, _ in t2_data]
+        t1_cap     = t1_members[0]
+        t2_cap     = t2_members[0]
+
+        # ── 1단계: 팀 분배 결과 공개 ──────────────────────
         embed = discord.Embed(
             title="🔥 내전 매칭 완료!",
-            description="팀 분배가 완료되었습니다. 밴픽 및 배팅을 시작합니다.",
+            description=(
+                f"점수 기반 팀 분배가 완료되었습니다.\n"
+                f"🛡️ 1팀 합산: **{t1_score:g}점** | ⚔️ 2팀 합산: **{t2_score:g}점**"
+            ),
             color=discord.Color.red()
         )
-        embed.add_field(name="🛡️ 1팀", value="\n".join([m.mention for m in t1_members]), inline=True)
-        embed.add_field(name="⚔️ 2팀", value="\n".join([m.mention for m in t2_members]), inline=True)
+        t1_text = "\n".join([f"{m.mention} ({s:g}점)" for m, s in t1_data])
+        t2_text = "\n".join([f"{m.mention} ({s:g}점)" for m, s in t2_data])
+        embed.add_field(name="🛡️ 1팀", value=t1_text, inline=True)
+        embed.add_field(name="⚔️ 2팀", value=t2_text, inline=True)
 
         bp_view = views.BanPickView(t1_cap, t2_cap, t1_members, t2_members)
         await interaction.followup.send(embed=embed, view=bp_view)
 
-        match_id = f"{interaction.guild.id}_{int(time.time())}"
-        db.collection('servers').document(str(interaction.guild.id)).collection('active_match').document('main').set(
-            {'match_id': match_id, 'bets': {},
-             't1_members': [str(m.id) for m in t1_members],
-             't2_members': [str(m.id) for m in t2_members]}
-        )
+        # ── 밴픽 완료 대기 ──────────────────────────────────
+        await bp_view.wait()
 
-        bet_embed = discord.Embed(title="🪙 승부 예측", description="승리할 팀에 배팅하세요!", color=discord.Color.gold())
+        # ── 2단계: 배팅 시작 ────────────────────────────────
+        match_id = f"{interaction.guild.id}_{int(time.time())}"
+        db.collection('servers').document(str(interaction.guild.id)).collection('active_match').document('main').set({
+            'match_id':   match_id,
+            'bets':       {},
+            't1_members': [str(m.id) for m in t1_members],
+            't2_members': [str(m.id) for m in t2_members],
+        })
+
+        bet_embed = discord.Embed(
+            title="🪙 승부 예측",
+            description="밴픽이 완료되었습니다! 승리할 팀에 포인트를 배팅하세요.",
+            color=discord.Color.gold()
+        )
         bet_view = views.BettingView(match_id, "1팀", "2팀")
         await interaction.channel.send(embed=bet_embed, view=bet_view)
 
+        # ── 3단계: 관리자 정산 패널 ─────────────────────────
         admin_embed = discord.Embed(
             title="⚙️ 정산 패널",
             description="경기가 종료되면 승리한 팀을 눌러 전적을 정산하세요.",

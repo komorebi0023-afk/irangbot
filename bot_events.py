@@ -18,6 +18,33 @@ chat_cooldowns = {}
 # 임시채널 삭제 대기 중인 태스크 관리 {channel_id: asyncio.Task}
 _temp_delete_tasks = {}
 
+# ── 멤버 인사 헬퍼 ────────────────────────────────────────────
+
+def _format_welcome_msg(template: str, member: discord.Member) -> str:
+    """변수 치환"""
+    guild = member.guild
+    return (template
+        .replace('[user]',        member.mention)
+        .replace('[userName]',    member.display_name)
+        .replace('[memberCount]', str(guild.member_count))
+        .replace('[server]',      guild.name)
+        .replace('[inviter]',     '')       # 초대자는 별도 추적 필요
+        .replace('[inviterName]', '')
+        .replace('[invites]',     '')
+    )
+
+async def _send_welcome_msg(bot, member: discord.Member, channel_id: str, msg: str):
+    """채널 또는 DM으로 메시지 전송"""
+    if not channel_id or not msg: return
+    if channel_id == 'dm':
+        try: await member.send(msg)
+        except Exception: pass
+    else:
+        channel = member.guild.get_channel(int(channel_id))
+        if channel:
+            try: await channel.send(msg)
+            except Exception: pass
+
 def setup_events(bot):
 
     @tasks.loop(minutes=10)
@@ -98,7 +125,7 @@ def setup_events(bot):
             try: await message.delete()
             except: pass
 
-        if message.author.bot: return
+        if message.author.bot: return  # 봇 메시지 무시 (데이터 저장 방지)
 
         uid = str(message.author.id)
         now = time.time()
@@ -111,17 +138,98 @@ def setup_events(bot):
         await bot.process_commands(message)
 
     @bot.event
+    async def on_member_join(member):
+        """서버 입장 시: 자동역할 부여 + 멤버 인사 메시지"""
+        if member.bot: return  # 봇 입장 시 데이터 저장 방지
+        guild_id = str(member.guild.id)
+
+        # ── 자동역할 처리 ──────────────────────────────────
+        try:
+            auto_roles_snap = db.collection('servers').document(guild_id).collection('auto_roles').stream()
+            for doc in auto_roles_snap:
+                data    = doc.to_dict()
+                role_id = data.get('role_id')
+                if not role_id: continue
+                role = member.guild.get_role(int(role_id))
+                if not role: continue
+                # 관리자 권한 역할은 절대 부여하지 않음
+                if role.permissions.administrator: continue
+                if data.get('type') == 'give':
+                    try: await member.add_roles(role)
+                    except Exception: pass
+                elif data.get('type') == 'remove':
+                    try: await member.remove_roles(role)
+                    except Exception: pass
+        except Exception as e:
+            print(f"❌ [자동역할 오류] {e}")
+
+        # ── 멤버 인사 메시지 ────────────────────────────────
+        try:
+            cards_snap = db.collection('servers').document(guild_id).collection('welcome_cards').stream()
+            for doc in cards_snap:
+                card = doc.to_dict()
+                if not card.get('enabled', True): continue
+                if card.get('type') != 'join': continue
+                msg = _format_welcome_msg(card.get('message', ''), member)
+                await _send_welcome_msg(bot, member, card.get('channel', ''), msg)
+        except Exception as e:
+            print(f"❌ [멤버 인사 오류] {e}")
+
+    @bot.event
     async def on_member_remove(member):
+        if member.bot: return
         guild_id = str(member.guild.id)
         user_id  = str(member.id)
         delete_user_stats(guild_id, user_id)
         print(f"🗑️ [데이터 삭제] {member.display_name} 님 정보 제거 완료.")
+
+        # ── 퇴장 인사 메시지 ────────────────────────────────
+        try:
+            cards_snap = db.collection('servers').document(guild_id).collection('welcome_cards').stream()
+            for doc in cards_snap:
+                card = doc.to_dict()
+                if not card.get('enabled', True): continue
+                if card.get('type') != 'leave': continue
+                msg = _format_welcome_msg(card.get('message', ''), member)
+                await _send_welcome_msg(bot, member, card.get('channel', ''), msg)
+        except Exception as e:
+            print(f"❌ [퇴장 인사 오류] {e}")
+
+    @bot.event
+    async def on_guild_join(guild):
+        """봇이 서버에 새로 참여했을 때 기존 멤버 데이터 스캔"""
+        print(f"✅ [서버 참여] {guild.name} ({guild.id}) - 기존 멤버 스캔 시작")
+        guild_id = str(guild.id)
+        # 서버 공개 정보 저장 (홈페이지 서버 리스트용)
+        try:
+            db.collection('public_servers').document(guild_id).set({
+                'guild_id':    guild_id,
+                'name':        guild.name,
+                'icon':        str(guild.icon) if guild.icon else None,
+                'member_count': guild.member_count,
+            }, merge=True)
+        except Exception as e:
+            print(f"❌ [서버 공개 정보 저장 실패] {e}")
+
+        # 기존 멤버 기본 데이터 생성 (봇 제외)
+        count = 0
+        for member in guild.members:
+            if member.bot: continue
+            try:
+                from db_interface import get_user_data
+                get_user_data(guild_id, str(member.id))  # 없으면 기본값 생성
+                count += 1
+            except Exception:
+                pass
+        print(f"✅ [멤버 스캔 완료] {guild.name}: {count}명")
 
     @bot.event
     async def on_guild_remove(guild):
         """봇이 서버에서 추방/탈퇴 시 해당 서버의 모든 데이터 삭제"""
         try:
             delete_all_server_data(str(guild.id))
+            # 공개 서버 목록에서도 제거
+            db.collection('public_servers').document(str(guild.id)).delete()
             print(f"🗑️ [서버 추방] {guild.name} ({guild.id}) 데이터 삭제 완료.")
         except Exception as e:
             print(f"❌ [서버 추방 데이터 삭제 실패] {guild.name}: {e}")
