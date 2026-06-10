@@ -319,6 +319,35 @@ async def run_setup_flow(
                 embed=embed,
                 view=EntryButtonView() if is_first_entry else None
             )
+            # 데이터 등록 완료 웰컴 카드 메시지 (스킵도 등록 완료로 처리)
+            if is_first_entry:
+                try:
+                    cards_snap = db_interface.db.collection('servers').document(str(guild_id)).collection('welcome_cards').stream()
+                    for doc in cards_snap:
+                        card = doc.to_dict()
+                        if not card.get('enabled', True): continue
+                        if card.get('type') != 'register': continue
+                        msg = (card.get('message', '')
+                            .replace('[user]',        target_member.mention)
+                            .replace('[userName]',    target_member.display_name)
+                            .replace('[memberCount]', str(interaction.guild.member_count))
+                            .replace('[server]',      interaction.guild.name)
+                            .replace('[inviter]',     '')
+                            .replace('[inviterName]', '')
+                            .replace('[invites]',     '')
+                        )
+                        channel_id = card.get('channel', '')
+                        if not channel_id or not msg: continue
+                        if channel_id == 'dm':
+                            try: await target_member.send(msg)
+                            except Exception: pass
+                        else:
+                            ch = interaction.guild.get_channel(int(channel_id))
+                            if ch:
+                                try: await ch.send(msg)
+                                except Exception: pass
+                except Exception as e:
+                    print(f"❌ [등록 완료 메시지 오류] {e}")
             return
 
     # ── 2단계: 모스트 영웅 ───────────────────────────
