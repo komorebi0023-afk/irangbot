@@ -149,3 +149,24 @@ def update_temp_channel_owner(guild_id, channel_id, new_owner_id):
     db.collection('servers').document(str(guild_id)).collection('temp_channels').document(str(channel_id)).set(
         {'owner_id': str(new_owner_id)}, merge=True
     )
+
+def delete_all_server_data(guild_id):
+    """봇 추방 시 해당 서버의 모든 데이터 삭제"""
+    guild_id = str(guild_id)
+    sub_collections = ['users', 'roles', 'config', 'active_match', 'match_history', 'temp_channels']
+    for sub_col in sub_collections:
+        docs = db.collection('servers').document(guild_id).collection(sub_col).stream()
+        batch = db.batch()
+        count = 0
+        for doc in docs:
+            batch.delete(doc.reference)
+            count += 1
+            if count >= 500:  # Firestore 배치 한도
+                batch.commit()
+                batch = db.batch()
+                count = 0
+        if count > 0:
+            batch.commit()
+    # 서버 문서 자체도 삭제
+    db.collection('servers').document(guild_id).delete()
+    print(f"🗑️ [서버 데이터 삭제] guild_id={guild_id} 완료")
