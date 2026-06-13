@@ -13,7 +13,7 @@ import views
 
 OW_MAPS = {
     "호위": ["66번 국도", "감시기지: 지브롤터", "도라도", "리알토", "샴발리 수도원", "서킷 로얄", "쓰레기촌", "하바나"],
-    "혼합": ["눔바니", "미드타운", "블리자드 월드", "아이헨발데", "왕의 길", "파라이수", "할리우드"],
+    "혼합": ["눔바니", "미드타운", "블리자드 월드", "아이헨발데", "왕의 길", "파라이수", "할리우드", "네온 정션"],
     "쟁탈": ["남극 반도", "네팔", "리장 타워", "사모아", "부산", "오아시스", "일리오스"],
     "밀기": ["뉴 퀸 스트리트", "루나사피", "이스페란사", "콜로세오"],
     "플래시포인트": ["뉴 정크 시티", "수라바사", "아틀리스"]
@@ -29,6 +29,7 @@ MAP_IMAGES = {
     "쓰레기촌": "https://i.namu.wiki/i/1X7j2MZfTl_imTYzom77Hlg9V_hReGTQblobM8_lfslOXGElduUwFoNW6fIB2A6dr1A1Pz1Ttqmbbxh_JgNJLk0iFfOeQFXd8E1X0z-t5R7-d01CuMCffftlfKpKmL1iutR7YuDmaUkMG9ZOEj4eBQ.webp",
     "하바나": "https://i.namu.wiki/i/7Nl8snlykffWm-piCROt95S1PPo7jpy0NTpsq_mpMPn7xd-oCqP33jQe4ldviWW59kDTymzdJrYGuR-o0S3TwynZxc409KgG3CZBuMxf33mDAMzPv1p5JjxWREJRdhrYUSw7nG6IMdfY-t3fPU07CA.webp",
     "눔바니": "https://i.namu.wiki/i/KJXTz9hVqeoNgFjAn7ao1u5TXj6M9QIQbIT_FSSIMurigLbFjBJYIfqgvye4Uywt-J14WCHNOeZrs2MhY2OpWHgmlgO47oElIYUEK2qVEktSN8feUpSjNVgqfE5GYsJjPbUHUBtssnKpSgAaLnWxjQ.webp",
+    "네온 정션": "https://i.namu.wiki/i/uLATeGq9VvvEE9m_ycfJlTrAP1yjLJIAMTRBAmKbkMiGXtpzWp7hjz9wONasSf6wANQq1JD8xHv3QE0bnB3zPCz6cGTFhP9l_YJyFE-f5A0T0R0MfD0BX1C0TjZ2a_J0Y0K0L0.webp",
     "미드타운": "https://i.namu.wiki/i/fRD5ffXB1WpMXcrSe0l5LruHgkp4HKg-qUlQGVRDzlr_5VNxy_5Z5_mLMktclKs5TGXw41sPsN6YVoWHGiCJvJsOGej5mbCQTMEFhjyL5LkswpoNOVF8F_RAekapGj7rulIjg4aTn8jcqmopccaqhA.webp",
     "블리자드 월드": "https://i.namu.wiki/i/gdcisiONMZ_pZ8hyiMphyVegcsjEZx-jr_itPziBvByO3MB31FPAvSHnxV8DF-mhWSJEGFZtBBNx4F3KPDLetfIEqkz2-iGe7rVMVqenhkEVlH8UOZEMvSRTSok_MsVENGmU6nsV_Em7WVtIfM7z-A.webp",
     "아이헨발데": "https://i.namu.wiki/i/q-KHUGXWozoTmfAmTE87qnLwqmBhZdiuhb-bTq-IgGsg-i33kZ_iT5EFpnTxRCIvhrtNumWjcf2IPUhKF83Q2cbWLCA86je1DCceTbTtCAogVnr0EuOxipJQER9gSLBMwN4u_MWfSUg-XLln4DUkWA.webp",
@@ -429,7 +430,7 @@ class GameCommands(commands.Cog):
         await interaction.followup.send("✅ 포지션 역할이 매핑되었습니다.", ephemeral=True)
 
     @server_setup.command(name="티어역할", description="티어에 맞게 지급될 디스코드 역할을 설정합니다.")
-    async def setup_tier_roles(self, interaction: discord.Interaction, 언랭: discord.Role = None, 브론즈: discord.Role = None, 실버: discord.Role = None, 골드: discord.Role = None, 플래티엄: discord.Role = None, 다이아몬드: discord.Role = None, 마스터: discord.Role = None, 그랜드마스터: discord.Role = None, 챔피언: discord.Role = None):
+    async def setup_tier_roles(self, interaction: discord.Interaction, 언랭: discord.Role = None, 브론즈: discord.Role = None, 실버: discord.Role = None, 골드: discord.Role = None, 플래티넘: discord.Role = None, 다이아몬드: discord.Role = None, 마스터: discord.Role = None, 그랜드마스터: discord.Role = None, 챔피언: discord.Role = None):
         await interaction.response.defer(ephemeral=True)
         if not check_admin(interaction):
             return await interaction.followup.send("❌ 권한이 없습니다.", ephemeral=True)
@@ -439,7 +440,7 @@ class GameCommands(commands.Cog):
         if 브론즈: roles_ref.document('tier_브론즈').set({'role_id': str(브론즈.id)})
         if 실버: roles_ref.document('tier_실버').set({'role_id': str(실버.id)})
         if 골드: roles_ref.document('tier_골드').set({'role_id': str(골드.id)})
-        if 플래티엄: roles_ref.document('tier_플래티엄').set({'role_id': str(플래티엄.id)})
+        if 플래티넘: roles_ref.document('tier_플래티넘').set({'role_id': str(플래티넘.id)})
         if 다이아몬드: roles_ref.document('tier_다이아몬드').set({'role_id': str(다이아몬드.id)})
         if 마스터: roles_ref.document('tier_마스터').set({'role_id': str(마스터.id)})
         if 그랜드마스터: roles_ref.document('tier_그랜드마스터').set({'role_id': str(그랜드마스터.id)})
