@@ -1586,15 +1586,17 @@ class AdminMatchPanel(discord.ui.View):
         guild_id       = self.guild_id
         guild          = interaction.guild
 
-        # 전적 업데이트
+        # 전적 업데이트 + 참가 포인트 지급
         for m in winner_members:
             data = db_interface.get_user_data(guild_id, m.id)
             data['wins'] = int(data.get('wins', 0)) + 1
             db_interface.update_user_stats(guild_id, m.id, data)
+            db_interface.update_user_points(guild_id, m.id, 150)  # 승리 포인트
         for m in loser_members:
             data = db_interface.get_user_data(guild_id, m.id)
             data['losses'] = int(data.get('losses', 0)) + 1
             db_interface.update_user_stats(guild_id, m.id, data)
+            db_interface.update_user_points(guild_id, m.id, 75)   # 패배 포인트
 
         # 배팅 정산 (트위치 시스템)
         doc_ref = db_interface.db.collection('servers').document(guild_id).collection('active_match').document('main')

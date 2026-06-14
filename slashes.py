@@ -220,11 +220,12 @@ class GameCommands(commands.Cog):
         embed.add_field(name="포지션", value=f"주: {data.get('main_pos', '-')} / 부: {data.get('sub_pos', '-')}", inline=True)
         embed.add_field(name="모스트 영웅", value=data.get('main_hero', '-'), inline=False)
 
-        wins = int(data.get('wins', 0))
-        losses = int(data.get('losses', 0))
+        wins = int(data.get('wins', 0) or 0)
+        losses = int(data.get('losses', 0) or 0)
         winrate = (wins / (wins + losses) * 100) if (wins + losses) > 0 else 0
+        points = int(data.get('points', 0) or 0)
         embed.add_field(name="전적", value=f"{wins}승 {losses}패 (승률 {winrate:.1f}%)", inline=True)
-        embed.add_field(name="보유 포인트", value=f"{data.get('points', 0):,} P", inline=True)
+        embed.add_field(name="보유 포인트", value=f"{points:,} P", inline=True)
         embed.set_thumbnail(url=target.display_avatar.url)
         await interaction.followup.send(embed=embed)
 
@@ -262,7 +263,7 @@ class GameCommands(commands.Cog):
             embed = discord.Embed(title="🏆 서버 포인트 랭킹 TOP 10", color=discord.Color.gold())
             text = ""
             for i, u in enumerate(top, 1):
-                text += f"**{i}위** {u.get('nickname', '알수없음')} - {u.get('points', 0):,} P\n"
+                text += f"**{i}위** {u.get('nickname', '알수없음')} - {int(u.get('points', 0) or 0):,} P\n"
             embed.add_field(name="💰 포인트", value=text or "데이터 없음", inline=False)
 
         await interaction.followup.send(embed=embed)
