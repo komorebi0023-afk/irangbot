@@ -243,10 +243,10 @@ class GameCommands(commands.Cog):
 
         if rank_type == "winrate":
             def wr(u):
-                w = int(u.get('wins', 0))
-                l = int(u.get('losses', 0))
+                w = int(str(u.get('wins', 0) or 0).replace(',', ''))
+                l = int(str(u.get('losses', 0) or 0).replace(',', ''))
                 return w / (w + l) if (w + l) > 0 else 0
-            users = [u for u in users if int(u.get('wins', 0)) + int(u.get('losses', 0)) > 0]
+            users = [u for u in users if int(str(u.get('wins', 0) or 0).replace(',', '')) + int(str(u.get('losses', 0) or 0).replace(',', '')) > 0]
             users.sort(key=wr, reverse=True)
             top = users[:10]
             embed = discord.Embed(title="🏆 서버 승률 랭킹 TOP 10", color=discord.Color.blue())
@@ -258,7 +258,7 @@ class GameCommands(commands.Cog):
                 text += f"**{i}위** {u.get('nickname', '알수없음')} - {rate}% ({w}승 {l}패)\n"
             embed.add_field(name="📈 승률", value=text or "데이터 없음", inline=False)
         else:
-            users.sort(key=lambda x: x.get('points', 0), reverse=True)
+            users.sort(key=lambda x: int(str(x.get('points', 0) or 0).replace(',', '')), reverse=True)
             top = users[:10]
             embed = discord.Embed(title="🏆 서버 포인트 랭킹 TOP 10", color=discord.Color.gold())
             text = ""

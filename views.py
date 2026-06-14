@@ -1591,12 +1591,35 @@ class AdminMatchPanel(discord.ui.View):
             data = db_interface.get_user_data(guild_id, m.id)
             data['wins'] = int(data.get('wins', 0)) + 1
             db_interface.update_user_stats(guild_id, m.id, data)
-            db_interface.update_user_points(guild_id, m.id, 150)  # 승리 포인트
+            db_interface.update_user_points(guild_id, m.id, 150)
+            try:
+                dm_embed = discord.Embed(
+                    title="🏆 내전 참가 포인트 지급",
+                    color=discord.Color.green()
+                )
+                dm_embed.add_field(name="서버", value=guild.name, inline=True)
+                dm_embed.add_field(name="결과", value="**승리**", inline=True)
+                dm_embed.add_field(name="지급 포인트", value="**+150P**", inline=True)
+                await m.send(embed=dm_embed)
+            except Exception:
+                pass
+
         for m in loser_members:
             data = db_interface.get_user_data(guild_id, m.id)
             data['losses'] = int(data.get('losses', 0)) + 1
             db_interface.update_user_stats(guild_id, m.id, data)
-            db_interface.update_user_points(guild_id, m.id, 75)   # 패배 포인트
+            db_interface.update_user_points(guild_id, m.id, 75)
+            try:
+                dm_embed = discord.Embed(
+                    title="🎮 내전 참가 포인트 지급",
+                    color=discord.Color.blue()
+                )
+                dm_embed.add_field(name="서버", value=guild.name, inline=True)
+                dm_embed.add_field(name="결과", value="**패배**", inline=True)
+                dm_embed.add_field(name="지급 포인트", value="**+75P**", inline=True)
+                await m.send(embed=dm_embed)
+            except Exception:
+                pass
 
         # 배팅 정산 (트위치 시스템)
         doc_ref = db_interface.db.collection('servers').document(guild_id).collection('active_match').document('main')
