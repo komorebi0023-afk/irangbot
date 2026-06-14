@@ -29,8 +29,8 @@ def get_user_data(guild_id, user_id):
 def update_user_points(guild_id, user_id, amount):
     doc_ref = db.collection('servers').document(str(guild_id)).collection('users').document(str(user_id))
     doc = doc_ref.get()
-    current = doc.to_dict().get('points', 1000) if doc.exists else 1000
-    doc_ref.set({'points': current + amount}, merge=True)
+    current = int(doc.to_dict().get('points', 1000) or 1000) if doc.exists else 1000
+    doc_ref.set({'points': current + int(amount)}, merge=True)
 
 def update_user_stats(guild_id, user_id, update_data):
     doc_ref = db.collection('servers').document(str(guild_id)).collection('users').document(str(user_id))
