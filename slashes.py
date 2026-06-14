@@ -13,7 +13,7 @@ import views
 
 OW_MAPS = {
     "호위": ["66번 국도", "감시기지: 지브롤터", "도라도", "리알토", "샴발리 수도원", "서킷 로얄", "쓰레기촌", "하바나"],
-    "혼합": ["눔바니", "미드타운", "블리자드 월드", "아이헨발데", "왕의 길", "파라이수", "할리우드", "네온 정션"],
+    "혼합": ["눔바니", "네온 정션", "미드타운", "블리자드 월드", "아이헨발데", "왕의 길", "파라이수", "할리우드"],
     "쟁탈": ["남극 반도", "네팔", "리장 타워", "사모아", "부산", "오아시스", "일리오스"],
     "밀기": ["뉴 퀸 스트리트", "루나사피", "이스페란사", "콜로세오"],
     "플래시포인트": ["뉴 정크 시티", "수라바사", "아틀리스"]
@@ -476,7 +476,7 @@ class GameCommands(commands.Cog):
     # [관리자] 내전 시작
     # ─────────────────────────────────────────────
 
-    @app_commands.command(name="내전시작", description="[관리자] 대기실 인원을 바탕으로 내전 매칭을 시작합니다.")
+    @app_commands.command(name="내전시작", description="[관리자] 대기실 인원을 바탕으로 내전을 시작합니다.")
     async def start_civil_war(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=False)
         if not check_admin(interaction):
@@ -491,11 +491,26 @@ class GameCommands(commands.Cog):
         if not lobby or not isinstance(lobby, discord.VoiceChannel):
             return await interaction.followup.send("❌ 유효한 대기실 음성 채널이 아닙니다.")
 
-        members = [m for m in lobby.members if not m.bot]
-        if len(members) < 2:
-            return await interaction.followup.send(f"❌ 인원이 부족합니다. (현재 {len(members)}명)")
+        all_members = [m for m in lobby.members if not m.bot]
+        if len(all_members) < 2:
+            return await interaction.followup.send(f"❌ 인원이 부족합니다. (현재 {len(all_members)}명)")
 
-        # ── 내전 점수 체크 ─────────────────────────────────
+        # ── 1단계: 제외할 플레이어 선택 ───────────────────────
+        exclude_view = views.ExcludePlayerView(all_members)
+        await interaction.followup.send(
+            f"**[1단계]** 내전에서 제외할 플레이어를 선택하세요.\n"
+            f"현재 대기실: {', '.join([m.display_name for m in all_members])}",
+            view=exclude_view
+        )
+        await exclude_view.wait()
+        if not exclude_view.confirmed:
+            return await interaction.channel.send("❌ 내전 시작이 취소되었습니다.")
+
+        members = [m for m in all_members if m.id not in exclude_view.excluded_ids]
+        if len(members) < 2:
+            return await interaction.channel.send("❌ 제외 후 인원이 너무 부족합니다.")
+
+        # ── 2단계: 내전 점수 체크 ──────────────────────────────
         no_score = []
         scored   = []
         for m in members:
@@ -508,77 +523,64 @@ class GameCommands(commands.Cog):
 
         if no_score:
             names = ", ".join([m.display_name for m in no_score])
-            return await interaction.followup.send(
+            return await interaction.channel.send(
                 f"❌ 내전 점수가 없는 유저가 있습니다: **{names}**\n"
                 f"`/유저관리` 또는 대시보드에서 점수를 먼저 설정해주세요."
             )
 
-        # ── 점수 기반 팀 밸런싱 (그리디 알고리즘) ──────────
-        # 점수 내림차순 정렬 후 번갈아 배치
-        scored.sort(key=lambda x: x[1], reverse=True)
-        t1_data, t2_data = [], []
-        t1_score = t2_score = 0.0
-
-        for member, score in scored:
-            if t1_score <= t2_score:
-                t1_data.append((member, score))
-                t1_score += score
-            else:
-                t2_data.append((member, score))
-                t2_score += score
-
-        t1_members = [m for m, _ in t1_data]
-        t2_members = [m for m, _ in t2_data]
-        t1_cap     = t1_members[0]
-        t2_cap     = t2_members[0]
-
-        # ── 1단계: 팀 분배 결과 공개 ──────────────────────
-        embed = discord.Embed(
-            title="🔥 내전 매칭 완료!",
-            description=(
-                f"점수 기반 팀 분배가 완료되었습니다.\n"
-                f"🛡️ 1팀 합산: **{t1_score:g}점** | ⚔️ 2팀 합산: **{t2_score:g}점**"
-            ),
-            color=discord.Color.red()
+        # ── 3단계: 듀오/라이벌 조건 선택 ──────────────────────
+        condition_view = views.ConditionSetupView(members)
+        await interaction.channel.send(
+            "**[2단계]** 듀오(같은 팀) 또는 라이벌(다른 팀) 조건을 설정하세요.\n"
+            "조건이 없으면 **건너뛰기**를 누르세요.",
+            view=condition_view
         )
-        t1_text = "\n".join([f"{m.mention} ({s:g}점)" for m, s in t1_data])
-        t2_text = "\n".join([f"{m.mention} ({s:g}점)" for m, s in t2_data])
-        embed.add_field(name="🛡️ 1팀", value=t1_text, inline=True)
-        embed.add_field(name="⚔️ 2팀", value=t2_text, inline=True)
+        await condition_view.wait()
+        if not condition_view.confirmed:
+            return await interaction.channel.send("❌ 내전 시작이 취소되었습니다.")
 
-        bp_view = views.BanPickView(t1_cap, t2_cap, t1_members, t2_members)
-        await interaction.followup.send(embed=embed, view=bp_view)
+        duo_pairs   = condition_view.duo_pairs    # [(member_a, member_b), ...]
+        rival_pairs = condition_view.rival_pairs  # [(member_a, member_b), ...]
 
-        # ── 밴픽 완료 대기 ──────────────────────────────────
-        await bp_view.wait()
+        # ── 4단계: 팀 분배 및 대진표 확정 ─────────────────────
+        announce_id = cfg.get('announce_id')
+        announce_ch = interaction.guild.get_channel(int(announce_id)) if announce_id else None
 
-        # ── 2단계: 배팅 시작 ────────────────────────────────
-        match_id = f"{interaction.guild.id}_{int(time.time())}"
-        db.collection('servers').document(str(interaction.guild.id)).collection('active_match').document('main').set({
-            'match_id':   match_id,
-            'bets':       {},
-            't1_members': [str(m.id) for m in t1_members],
-            't2_members': [str(m.id) for m in t2_members],
-        })
-
-        bet_embed = discord.Embed(
-            title="🪙 승부 예측",
-            description="밴픽이 완료되었습니다! 승리할 팀에 포인트를 배팅하세요.",
-            color=discord.Color.gold()
+        used_arrangements = []
+        t1_members, t2_members = views.balance_teams(scored, duo_pairs, rival_pairs, used_arrangements)
+        used_arrangements.append(
+            (frozenset(m.id for m in t1_members), frozenset(m.id for m in t2_members))
         )
-        bet_view = views.BettingView(match_id, "1팀", "2팀")
-        await interaction.channel.send(embed=bet_embed, view=bet_view)
 
-        # ── 3단계: 관리자 정산 패널 ─────────────────────────
-        admin_embed = discord.Embed(
-            title="⚙️ 정산 패널",
-            description="경기가 종료되면 승리한 팀을 눌러 전적을 정산하세요.",
-            color=discord.Color.dark_gray()
+        match_ctx = {
+            'guild_id':          str(interaction.guild.id),
+            'scored':            scored,
+            'duo_pairs':         duo_pairs,
+            'rival_pairs':       rival_pairs,
+            'cfg':               cfg,
+            'used_arrangements': used_arrangements,
+        }
+
+        lineup_embed = views.build_lineup_embed(t1_members, t2_members, scored)
+
+        # 공지채널에 대진표 표시
+        announce_msg = None
+        if announce_ch:
+            announce_msg = await announce_ch.send(
+                "📋 **내전 대진표 (조율 중)**",
+                embed=lineup_embed
+            )
+
+        lineup_view = views.LineupConfirmView(
+            t1_members, t2_members, match_ctx,
+            interaction.channel, announce_ch, announce_msg
         )
         await interaction.channel.send(
-            embed=admin_embed,
-            view=views.AdminControlPanel(match_id, bet_view, t1_members, t2_members)
+            "**[3단계]** 대진표를 확인하고 확정하거나 재분배하세요.",
+            embed=lineup_embed,
+            view=lineup_view
         )
+
 
 
 async def setup(bot):
