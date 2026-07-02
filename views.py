@@ -516,6 +516,13 @@ class EntryButtonView(discord.ui.View):
 
     @discord.ui.button(label="서버 프로필 등록", style=discord.ButtonStyle.primary, custom_id="persistent_entry_btn")
     async def entry_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        cfg = db_interface.get_server_config(interaction.guild.id)
+        if cfg.get('entry_system_enabled') == False:
+            return await interaction.response.send_message(
+                "❌ 현재 이 서버에서는 입장 등록 기능이 비활성화되어 있습니다.",
+                ephemeral=True
+            )
+
         data = get_user_data(interaction.guild.id, interaction.user.id)
 
         # 이미 입장 완료한 유저 차단
