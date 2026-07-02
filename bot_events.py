@@ -5,7 +5,7 @@ import time
 import asyncio
 import threading
 from db_interface import (
-    db, update_user_points, get_server_config, delete_user_stats,
+    db, update_user_points, update_user_stats, get_server_config, delete_user_stats,
     get_temp_channel_config, save_temp_channel, delete_temp_channel,
     get_temp_channel, get_user_temp_channel_count, update_temp_channel_owner,
     delete_all_server_data
