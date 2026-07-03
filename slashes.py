@@ -584,26 +584,23 @@ class GameCommands(commands.Cog):
 
 
     @app_commands.command(name="배그닉네임", description="[관리자] 특정 유저의 배그 닉네임을 설정합니다.")
-        async def set_pubg_nickname(self, interaction: discord.Interaction, 유저: discord.Member, 닉네임: str):
-            await interaction.response.defer(ephemeral=True)
-            if not check_admin(interaction):
-                return await interaction.followup.send("❌ 권한이 없습니다.", ephemeral=True)
-
-            update_user_stats(interaction.guild.id, 유저.id, {'pubg_nickname': 닉네임})
-
-            base_nick = 유저.display_name.split(' (')[0]
-            new_nick  = f"{base_nick} ({닉네임})"
-            if len(new_nick) > 32:
-                new_nick = new_nick[:32]
-            try:
-                await 유저.edit(nick=new_nick)
-            except discord.errors.Forbidden:
-                pass
-
-            await interaction.followup.send(
-                f"✅ **{유저.display_name}** 님의 배그 닉네임을 **{닉네임}**으로 설정했습니다.",
-                ephemeral=True
-            )
+    async def set_pubg_nickname(self, interaction: discord.Interaction, 유저: discord.Member, 닉네임: str):
+        await interaction.response.defer(ephemeral=True)
+        if not check_admin(interaction):
+            return await interaction.followup.send("❌ 권한이 없습니다.", ephemeral=True)
+        update_user_stats(interaction.guild.id, 유저.id, {'pubg_nickname': 닉네임})
+        base_nick = 유저.display_name.split(' (')[0]
+        new_nick  = f"{base_nick} ({닉네임})"
+        if len(new_nick) > 32:
+            new_nick = new_nick[:32]
+        try:
+            await 유저.edit(nick=new_nick)
+        except discord.errors.Forbidden:
+            pass
+        await interaction.followup.send(
+            f"✅ **{유저.display_name}** 님의 배그 닉네임을 **{닉네임}**으로 설정했습니다.",
+            ephemeral=True
+        )
 
 async def setup(bot):
     await bot.add_cog(GameCommands(bot))
