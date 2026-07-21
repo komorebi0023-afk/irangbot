@@ -148,34 +148,37 @@ def setup_events(bot):
                 update_user_points(message.guild.id, uid, reward)
                 chat_cooldowns[uid] = now
             if message.guild and not message.author.bot:
-                        cfg = get_server_config(message.guild.id)
-                        if cfg.get('pubg_system_enabled') == True:
-                            pubg_ch_id = cfg.get('pubg_channel_id')
-                            if pubg_ch_id and str(message.channel.id) == str(pubg_ch_id):
-                                pubg_nick = message.content.strip()
-                                if pubg_nick:
-                                    # DB 저장
-                                    update_user_stats(
-                                        message.guild.id,
-                                        message.author.id,
-                                        {'pubg_nickname': pubg_nick}
-                                    )
-                                    # 디스코드 닉네임 변경
-                                    base_nick = message.author.display_name.split(' (')[0]
-                                    new_nick  = f"{base_nick} ({pubg_nick})"
-                                    if len(new_nick) > 32:
-                                        new_nick = new_nick[:32]
-                                    try:
-                                        await message.author.edit(nick=new_nick)
-                                    except discord.errors.Forbidden:
-                                        pass
-                                    try:
-                                        await message.channel.send(
-                                            f"✅ {message.author.mention} 배그 닉네임이 **{pubg_nick}**으로 등록되었습니다!",
-                                            delete_after=5
-                                        )
-                                    except Exception:
-                                        pass
+                cfg = get_server_config(message.guild.id)
+                if cfg.get('pubg_system_enabled') == True:
+                    pubg_ch_id = cfg.get('pubg_channel_id')
+                    if pubg_ch_id and str(message.channel.id) == str(pubg_ch_id):
+                        pubg_nick = message.content.strip()
+                        print(f"🔍 [배그닉네임] 감지: {message.author.display_name} → '{pubg_nick}'")
+                        if pubg_nick:
+                            update_user_stats(
+                                message.guild.id,
+                                message.author.id,
+                                {'pubg_nickname': pubg_nick}
+                            )
+                            print(f"✅ [배그닉네임] DB 저장 완료: {message.author.display_name}")
+                            base_nick = message.author.display_name.split(' (')[0]
+                            new_nick  = f"{base_nick} ({pubg_nick})"
+                            if len(new_nick) > 32:
+                                new_nick = new_nick[:32]
+                            try:
+                                await message.author.edit(nick=new_nick)
+                                print(f"✅ [배그닉네임] 닉네임 변경 성공: {new_nick}")
+                            except discord.errors.Forbidden:
+                                print(f"❌ [배그닉네임] 권한 부족: {message.author.display_name}")
+                            except Exception as e:
+                                print(f"❌ [배그닉네임] 실패: {message.author.display_name} / {e}")
+                            try:
+                                await message.channel.send(
+                                    f"✅ {message.author.mention} 배그 닉네임이 **{pubg_nick}**으로 등록되었습니다!",
+                                    delete_after=5
+                                )
+                            except Exception:
+                                pass
         await bot.process_commands(message)
 
     @bot.event
