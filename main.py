@@ -5,6 +5,7 @@ import db_interface
 import bot_events
 import slashes  # 이름이 변경된 명령어 파일 로드
 import views    # 영구 버튼 유지를 위해 UI 파일 로드
+import reaction_roles
 
 class IrangBot(commands.Bot):
     def __init__(self):
@@ -20,6 +21,7 @@ class IrangBot(commands.Bot):
         
         # 2. 명령어 Cog 로드
         await slashes.setup(self)
+        await reaction_roles.setup(self)
         
         # 3. 영구 뷰(Persistent View) 등록
         self.add_view(views.EntryButtonView()) 
